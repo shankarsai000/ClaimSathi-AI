@@ -3,6 +3,10 @@
 > **IRDAI-Aligned, Multilingual Conversational Motor Insurance Claims Platform for India.**  
 > Powered by **Gnani AI Speech APIs** (Prisma STT + Timbre TTS), **Multi-Stage Cryptographic Evidence Screening** (C2PA Content Credentials, Google SynthID, SHA-256, 64-bit DCT pHash), **Supabase PostgreSQL & Cloud Storage**, and **Dynamic Multi-Language 9-Section Dossier Generation**.
 
+> 📄 **[Read our 1-Page Solution Pitch (`SOLUTION_PITCH.md`)](./SOLUTION_PITCH.md)** *(Prepared for The Great Indian Internship Challenge Submission)*  
+> 🔑 **[View Pre-Seeded Test Customer Accounts (`USER_ACCOUNTS.md`)](./USER_ACCOUNTS.md)**  
+> 🖼️ **[View Real Accident Evidence Samples (`test_evidence_samples/`)](./test_evidence_samples/README.md)**
+
 ---
 
 ## 📌 Table of Contents
