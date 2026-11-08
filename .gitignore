@@ -13,6 +13,7 @@ env/
 .pytest_cache/
 *.db
 *.sqlite3
+backend/storage/
 
 # Node / Frontend
 node_modules/
