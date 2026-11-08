@@ -1,156 +1,106 @@
-# ClaimSathi AI – Voice-First Insurance Claim Intake
+# ClaimSathi AI — Conversational Motor Insurance Claims Platform
 
-> **Voice-first motor insurance claim-intake application designed for Indian users who speak naturally in Hinglish and code-mixed Indian languages.**
-> Powered by **Gnani AI Speech APIs** (Gnani Prisma for Speech-to-Text and Gnani Timbre for Text-to-Speech).
-
----
-
-## Architecture Overview (Phase 2)
-
-- **Frontend**: React 18, TypeScript, Vite, Tailwind CSS.
-  - Direct 16-bit PCM WAV microphone recorder (Web Audio API, 16kHz mono).
-  - Audio file upload support (`.wav`, `.mp3`, `.ogg`, `.flac`, `.aac`, `.m4a`).
-  - 30-second live countdown timer and volume visualization.
-  - Real-time TTS audio playback using HTML5 Audio.
-  - Clear provider indicators (`GNANI AI [LIVE]` vs `DEMO / SIMULATED`).
-  - Recoverable error handling with immediate fallback to Demo Mode without reload.
-- **Backend**: Python 3.11+, FastAPI, Pydantic v2, HTTPX.
-  - **Prisma STT**: Configurable for Prisma v2.5 (`gnani-prisma-v2.5` / `prisma-v2.5`) and Prisma v3.0 (`prisma-v3.0`).
-  - **Timbre TTS**: Timbre v2.5 with verified voice (`Nalini` for `hi-IN`).
-  - 30-second maximum duration validation and format inspection.
-  - Safe error handling: 401 unauthorized, 402 insufficient credits, 429 rate limits, 502 upstream errors.
-  - No secret API key leakage in logs or responses.
-- **Storage**: Async SQLite (`aiosqlite`) storing claims and activity timeline.
-- **Safety**: All submitted tickets are local demo tickets (`DEMO-XXXXXXXX`). No real insurance claim is filed.
+> **IRDAI-Aligned, Multilingual Voice-First Motor Insurance Claim Preparation Platform for India.**  
+> Powered by **Gnani AI Speech APIs** (Prisma STT + Timbre TTS), **Multi-Stage Cryptographic Evidence Screening** (C2PA, SynthID, SHA-256, 64-bit DCT pHash), **Supabase PostgreSQL & Storage**, and **Dynamic Multi-Language Dossier Generation**.
 
 ---
 
-## 1. Secure Configuration
+## 🌟 Executive Summary & Capabilities
 
-Configuration is loaded **exclusively on the FastAPI backend** from environment variables. Secrets are never exposed to the browser.
+ClaimSathi AI implements the full **7-Phase / 9-Step Specification** (`_ClaimSathi AI product flow.pdf`):
 
-Create your backend `.env` from `.env.example`:
-
-```bash
-cd backend
-copy .env.example .env    # Windows
-# cp .env.example .env    # macOS / Linux
-```
-
-### Environment Variables (`backend/.env`):
-
-| Variable | Description | Example / Default |
-| :--- | :--- | :--- |
-| `GNANI_API_KEY_ID` | Your Gnani Vachana API Key | `vach_...` |
-| `GNANI_STT_MODEL` | Speech-to-Text model | `prisma-v2.5` or `prisma-v3.0` |
-| `GNANI_STT_LANGUAGE_CODE` | Default language code for STT | `hi-IN` |
-| `GNANI_TTS_MODEL` | Text-to-Speech model | `timbre-v2.5` |
-| `GNANI_TTS_LANGUAGE` | Default language for TTS | `hi-IN` |
-| `GNANI_TTS_VOICE` | Verified voice name | `Nalini` |
-
-> `.env` is gitignored. Never commit credentials to version control.
+1. **Customer Account & Claims Vault**:
+   - Secure customer authentication via **Email, Phone Number, or Customer ID** with **Password or 6-digit OTP**.
+   - Cloud-native **Supabase PostgreSQL** + fallback local SQLite storage with IRDAI-compliant user consents.
+2. **Multilingual Conversational AI Intake**:
+   - **Auto-Detect (`indic-auto`) Mode**: Detects Telugu, Kannada, Hindi, Tamil, and English in the very first turn and locks on to the customer's language.
+   - **100% English Insurer Normalization**: Spoken Kannada/Telugu damage, location, and vehicle numbers are phonetically parsed and translated into clean English for insurance underwriters.
+   - **Strict Per-Field Type Validation & Out-of-Order Routing**: Rejects conversational questions (e.g. `"ಸಿ ಎಂ ಎಂ ಅಂದರೆ ಏನು?"`) and automatically re-routes misplaced answers (e.g. policy number given for location) to the correct field.
+3. **5-Stage Evidence Integrity & AI Provenance Screening**:
+   - **Stage 1: File Format & Magic Bytes** (JPEG, PNG, HEIC, MP4, MOV).
+   - **Stage 2: C2PA Content Credentials** (Detects Adobe Firefly, DALL-E, synthetic edits).
+   - **Stage 3: Google SynthID Digital Watermark** (Detects Imagen-generated synthetic damage).
+   - **Stage 4: SHA-256 Exact Duplicate Screening**.
+   - **Stage 5: 64-Bit DCT Perceptual Hashing (pHash)** (Flags WhatsApp-compressed, resized, or re-saved duplicate fraud across claims).
+   - **Guided Live Camera Capture** for tamper-proof odometer, VIN plate, and 360° accident angles.
+4. **9-Section Insurer Dossier & Localized Downloads**:
+   - Compiles a complete 9-section insurance dossier with cryptographic evidence hashes.
+   - Exports **Official English PDF** (for underwriters) and **Canonical JSON**.
+   - **Multi-Language Download / Print**: Customers can read and print their dossier in **English, ಕನ್ನಡ, తెలుగు, हिन्दी, or தமிழ்**.
+5. **Global App Language Switcher & Settings Modal**:
+   - Real-time UI language switcher across all headers, menus, and forms.
+   - Customer Profile & Policy details modal.
 
 ---
 
-## 2. Quick Start & Startup Commands
+## 👥 Seeded Test Customer Accounts
 
-### Step 1: Backend Server (Port 8000)
+The following accounts are pre-seeded in the database (`users`, `user_consents`, `claims`) and available via **One-Click Auto-Fill** on the login screen:
 
+| Customer Name | Email / Identifier | Password | City / Vehicle | Seeded Claim ID |
+| :--- | :--- | :--- | :--- | :--- |
+| **Rahul Sharma** | `rahul.sharma@claimsathi.in` | `Rahul@2026` | Bengaluru (Car / Bike) | `CS-2026-000085` |
+| **Sai Shankar Reddy** | `saishankar.reddy@claimsathi.in` | `Shankar@2026` | Hyderabad (Car) | `CS-2026-000092` |
+| **Ananya Lakshmi Iyer** | `ananya.iyer@claimsathi.in` | `Ananya@2026` | Chennai (Two-Wheeler) | `CS-2026-000104` |
+| **Vikramaditya Deshmukh** | `vikram.deshmukh@claimsathi.in` | `Vikram@2026` | Pune (Car / SUV) | `CS-2026-000118` |
+
+> *Full details and policy numbers are available in [`USER_ACCOUNTS.md`](./USER_ACCOUNTS.md).*
+
+---
+
+## 📸 Real Accident Evidence Sample Sets
+
+A complete test suite of real accident photographs and synthetic edge cases is included in [`test_evidence_samples/`](./test_evidence_samples/):
+
+- **Real Car Accidents**: Front bumper crashes, side impact dents, rear tailgate collisions.
+- **Real Bike Accidents**: Handlebar & tank dent, exhaust scrape, front fork impacts.
+- **Cryptographic Fraud Edge Cases**:
+  - `synthetic_c2pa_ai_generated.jpg` (Triggers C2PA synthetic warning)
+  - `synthid_watermarked_accident.jpg` (Triggers SynthID synthetic alert)
+  - `exact_duplicate_test.jpg` (Triggers SHA-256 duplicate alert)
+  - `whatsapp_duplicate_test.jpg` (Triggers 64-bit DCT pHash duplicate alert)
+
+---
+
+## 🚀 Quick Start Guide
+
+### 1. Prerequisites
+- **Python 3.11+**
+- **Node.js 18+** & npm
+
+### 2. Backend Server (FastAPI on Port 8080)
 ```powershell
 cd "d:\ClaimSathi AI\backend"
-.\venv\Scripts\activate
-uvicorn app.main:app --reload --port 8000
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8080
 ```
+- API Docs: `http://127.0.0.1:8080/docs`
+- Health Endpoint: `http://127.0.0.1:8080/api/health`
 
-- API Base URL: `http://localhost:8000`
-- Interactive OpenAPI Docs: `http://localhost:8000/docs`
-
-### Step 2: Frontend Dev Server (Port 5173)
-
+### 3. Frontend Dev Server (Vite on Port 5173)
 ```powershell
 cd "d:\ClaimSathi AI\frontend"
 npm run dev
 ```
-
-- Web UI: `http://localhost:5173`
-- Vite automatically proxies `/api` calls to `http://localhost:8000`.
+- Web Application: `http://localhost:5173`
 
 ---
 
-## 3. Running Automated Tests
+## 🧪 Automated Test Suite (100% Passing)
 
-All automated unit and integration tests use **mocked HTTP responses** so that running tests **never consumes Gnani API credits**.
+Run the full automated test suite covering all 7 phases, voice intake, edge-case validation, evidence hashing, and insurer gateway:
 
 ```powershell
 cd "d:\ClaimSathi AI\backend"
-.\venv\Scripts\activate
-pytest -v
+python -m pytest -v
 ```
 
-### Test Suite Coverage:
-- `test_health_check`: Health check and configuration status.
-- `test_create_claim_success`: Local claim ticket creation with `DEMO-` prefix.
-- `test_create_claim_validation_error`: Input validation on required claim fields.
-- `test_get_claim_not_found`: 404 handling on missing ticket IDs.
-- `test_list_claims`: Listing tickets from SQLite.
-- `test_create_and_retrieve_claim`: Full CRUD flow with activity timeline.
-- `test_transcribe_prisma_v25_mocked`: Prisma v2.5 multipart request format and response parsing.
-- `test_transcribe_prisma_v30_mocked`: Prisma v3.0 model and writing mode handling.
-- `test_transcribe_enforces_30s_duration_limit`: Rejection of recordings exceeding 30.0 seconds.
-- `test_transcribe_rejects_unsupported_format`: Guidance on unsupported formats like WebM.
-- `test_transcribe_handles_401_unauthorized`: Clear actionable error on invalid credentials.
-- `test_transcribe_handles_402_insufficient_credits`: Clean error handling for exhausted credits.
-- `test_transcribe_demo_mode_returns_mock_without_external_call`: Explicit demo mode isolation.
-- `test_speak_timbre_tts_mocked`: Timbre TTS request format (`audio_config`, `Nalini`, WAV output).
-- `test_speak_failure_does_not_return_mock`: Verifies live TTS failure never silently returns mock audio.
-- `test_speak_demo_mode_returns_wav`: Playable WAV tone for demo mode.
-- `test_api_key_not_leaked_in_responses`: Guarantees secrets are never leaked in headers or JSON details.
+Expected output:
+```text
+====================== 25 passed in 13.64s =======================
+```
 
 ---
 
-## 4. API Endpoints
-
-### Voice Endpoints (Phase 2)
-
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `POST` | `/api/voice/transcribe` | Upload audio file (`audio_file`) for Gnani Prisma ASR (max 30s) |
-| `POST` | `/api/voice/speak` | Synthesize speech (`text`, `language`, `voice`) via Gnani Timbre TTS |
-
-### Claim & Health Endpoints
-
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `GET` | `/api/health` | Health check and Gnani configuration status |
-| `POST` | `/api/claims/` | Create a local demo claim ticket |
-| `GET` | `/api/claims/` | List all demo claims |
-| `GET` | `/api/claims/{id}` | Get ticket detail and activity timeline |
-| `GET` | `/api/claims/stats` | Dashboard metrics |
-
----
-
-## 5. Manual Verification Steps (Live Gnani APIs)
-
-Follow these steps to manually test live speech recognition and synthesis when valid credentials are configured:
-
-### Testing Speech Synthesis (Gnani Timbre TTS):
-1. Start backend (`uvicorn app.main:app --port 8000`) and frontend (`npm run dev`).
-2. Open `http://localhost:5173/claims/new`.
-3. Switch toggle to **"Live Gnani AI"**.
-4. In the missing information question or after transcription, click **"Listen (Timbre TTS)"**.
-5. Verify you hear clear spoken Hindi audio generated in real-time by Gnani Timbre using the `Nalini` voice.
-
-### Testing Speech-to-Text (Gnani Prisma ASR):
-1. On `http://localhost:5173/claims/new`, ensure mode is set to **"Live Gnani AI"**.
-2. Click **"Start Recording (Max 30s)"** and speak naturally in Hinglish:
-   > *"Mera kal Andheri East Mumbai mein accident ho gaya tha car ka, left door tut gaya hai. Policy number MOT-2024-MH-78432."*
-3. Click **"Finish & Transcribe"** before the 30-second timer expires.
-4. Verify the exact Hindi / Hinglish transcript appears with `GNANI AI [LIVE]` badge, showing model `prisma-v2.5` or `prisma-v3.0` and latency.
-5. Verify the extracted fields (Policy, Location, Date, Vehicle, Damage) are auto-populated in the review card.
-6. Confirm and create the ticket, then view the activity timeline on the details page.
-
-### Testing Error Recovery:
-1. Temporarily change `GNANI_API_KEY_ID=invalid_key` in `.env`.
-2. Attempt a recording in Live mode.
-3. Observe the clear error banner: *"Authentication failed with Gnani Speech API"*.
-4. Click **"Switch to Demo Mode"** to immediately recover and continue the workflow without page reload.
+## 🛡️ Architecture & Security Integrity
+- **Zero API Key Leakage**: Gnani Vachana credentials and Supabase database connection strings are kept strictly in backend `.env`.
+- **Sandbox Safe**: All submitted claims generate verifiable mock insurer acknowledgments (`ACK-BajajAllianz-...`) with no accidental live carrier submissions.

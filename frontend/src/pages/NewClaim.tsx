@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, getStoredUser } from '../api'
+import { useAppSettings } from '../i18n'
 import type {
   ClaimField,
   VoiceTranscribeResponse,
@@ -66,6 +67,7 @@ const INDIAN_LANGUAGES = [
 
 export default function NewClaim() {
   const navigate = useNavigate()
+  const { t } = useAppSettings()
 
   // Wizard Step: 1 = Conversation, 2 = Evidence & Live Camera, 3 = Customer Review & Declaration
   const [wizardStep, setWizardStep] = useState<1 | 2 | 3>(1)
@@ -73,7 +75,7 @@ export default function NewClaim() {
 
   // Claim fields & conversational state
   const [fields, setFields] = useState<ClaimField[]>([
-    { name: 'policy_reference', label: 'Policy Reference', value: null, confidence: 'missing', is_edited: false, follow_up_question: null },
+    { name: 'policy_reference', label: 'Policy / Vehicle Number', value: null, confidence: 'missing', is_edited: false, follow_up_question: null },
     { name: 'vehicle_type', label: 'Vehicle Type', value: null, confidence: 'missing', is_edited: false, follow_up_question: null },
     { name: 'incident_location', label: 'Incident Location', value: null, confidence: 'missing', is_edited: false, follow_up_question: null },
     { name: 'incident_date', label: 'Incident Date', value: null, confidence: 'missing', is_edited: false, follow_up_question: null },
@@ -109,9 +111,58 @@ export default function NewClaim() {
   const [isDemoMode, setIsDemoMode] = useState(false)
   const [activeModel, setActiveModel] = useState<string>('prisma-v3.0')
   const [selectedLanguage, setSelectedLanguage] = useState<string>('indic-auto')
+  const [lockedLanguage, setLockedLanguage] = useState<string | null>(null)
   const [autoVoiceEnabled, setAutoVoiceEnabled] = useState(true)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [hasStartedIntake, setHasStartedIntake] = useState(false)
+
+  // Resolve the active session language:
+  // 1) If user manually selected a specific language, use it.
+  // 2) If 'indic-auto' is selected and first turn locked a language, use lockedLanguage.
+  // 3) Otherwise 'indic-auto' for initial detection.
+  const effectiveSttLanguage =
+    selectedLanguage !== 'indic-auto' ? selectedLanguage : lockedLanguage || 'indic-auto'
+  const effectiveConversationLanguage =
+    selectedLanguage !== 'indic-auto' ? selectedLanguage : lockedLanguage || 'te-IN'
+
+  const lockLanguageFromFirstTurn = (detectedLang?: string) => {
+    if (!detectedLang || detectedLang === 'indic-auto') return
+    if (selectedLanguage === 'indic-auto' && !lockedLanguage) {
+      setLockedLanguage(detectedLang)
+    }
+  }
+
+  // Merge newly extracted fields with existing captured fields so already spoken fields are NEVER lost or re-asked
+  const mergeExtractedFields = (
+    prevFields: ClaimField[],
+    incomingFields: ClaimField[],
+  ): { merged: ClaimField[]; remainingMissing: string[] } => {
+    const incomingMap = new Map(incomingFields.map((f) => [f.name, f]))
+    const merged = prevFields.map((existing) => {
+      const inc = incomingMap.get(existing.name)
+      const existingHasValue = existing.confidence !== 'missing' && Boolean(existing.value)
+      const incomingHasValue = inc && inc.confidence !== 'missing' && Boolean(inc.value)
+
+      if (incomingHasValue && inc) {
+        return {
+          ...existing,
+          value: inc.value,
+          confidence: 'high' as const,
+          follow_up_question: null,
+        }
+      }
+      if (existingHasValue) {
+        return existing
+      }
+      return inc || existing
+    })
+
+    const remainingMissing = merged
+      .filter((f) => f.confidence === 'missing' || !f.value)
+      .map((f) => f.name)
+
+    return { merged, remainingMissing }
+  }
 
   // Audio Recording (Main Claim Description)
   const [isRecording, setIsRecording] = useState(false)
@@ -173,7 +224,7 @@ export default function NewClaim() {
   }, [messages, isRecording, isAnswerRecording])
 
   // ── Speech Synthesis with Gnani Timbre ──
-  const speakText = async (text: string, langCode: string = 'en-IN') => {
+  const speakText = async (text: string, langCode?: string) => {
     if (isPlayingAudio) {
       stopAudio()
       setIsPlayingAudio(false)
@@ -186,12 +237,17 @@ export default function NewClaim() {
     setError('')
 
     try {
-      const targetLang = langCode.startsWith('te')
+      const code = langCode || effectiveConversationLanguage || 'en-IN'
+      const targetLang = code.startsWith('te')
         ? 'te-IN'
-        : langCode.startsWith('kn')
+        : code.startsWith('kn')
         ? 'kn-IN'
-        : langCode.startsWith('hi')
+        : code.startsWith('hi')
         ? 'hi-IN'
+        : code.startsWith('ta')
+        ? 'ta-IN'
+        : code.startsWith('mr')
+        ? 'mr-IN'
         : 'en-IN'
       const audioBlob = await api.synthesizeSpeech(text, {
         demo: isDemoMode,
@@ -289,7 +345,7 @@ export default function NewClaim() {
       {
         id: procTurnId,
         sender: 'assistant',
-        text: 'Transcribing your speech with Gnani Prisma and extracting vehicle, policy, location, and damage details...',
+        text: 'Transcribing your speech with Gnani Prisma and extracting vehicle, policy, location, date, and damage details...',
         timestamp: 'Just now',
         isStreaming: true,
       },
@@ -300,12 +356,21 @@ export default function NewClaim() {
         blob,
         filename,
         isDemoMode,
-        selectedLanguage,
+        effectiveSttLanguage,
       )
 
-      setTranscript(data.transcript)
-      setFields(data.fields)
-      setMissingFields(data.missing_fields)
+      const detectedLang =
+        data.assistant_language ||
+        data.detected_language ||
+        (selectedLanguage !== 'indic-auto' ? selectedLanguage : 'te-IN')
+
+      // Lock onto the user's first spoken language for the entire conversation if 'indic-auto' was active
+      lockLanguageFromFirstTurn(detectedLang)
+
+      setTranscript((prev) => (prev ? `${prev} ${data.transcript}` : data.transcript))
+      const { merged, remainingMissing } = mergeExtractedFields(fields, data.fields)
+      setFields(merged)
+      setMissingFields(remainingMissing)
       if (data.model) setActiveModel(data.model)
       setActiveMissingIndex(0)
 
@@ -313,7 +378,7 @@ export default function NewClaim() {
         id: 'user-' + Date.now(),
         sender: 'user',
         text: data.transcript,
-        language: data.detected_language || selectedLanguage,
+        language: detectedLang,
         audioDuration: data.request_metadata?.duration_seconds,
         latencyMs: data.request_metadata?.processing_time
           ? Math.round(data.request_metadata.processing_time * 1000)
@@ -323,21 +388,20 @@ export default function NewClaim() {
 
       const assistantText = data.assistant_dialogue || 'Thank you! I have processed your initial claim intake.'
       const assistantSpeech = data.assistant_speech_text || assistantText
-      const assistantLang = data.assistant_language || data.detected_language || 'te-IN'
 
       const assistantTurn: MessageTurn = {
         id: 'assistant-' + Date.now(),
         sender: 'assistant',
         text: assistantText,
         audioText: assistantSpeech,
-        language: assistantLang,
+        language: detectedLang,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       }
 
       setMessages((prev) => [...prev.filter((m) => m.id !== procTurnId), userTurn, assistantTurn])
 
       if (autoVoiceEnabled && assistantSpeech) {
-        setTimeout(() => speakText(assistantSpeech, assistantLang), 350)
+        setTimeout(() => speakText(assistantSpeech, detectedLang), 350)
       }
     } catch (err: any) {
       setMessages((prev) => prev.filter((m) => m.id !== procTurnId))
@@ -354,17 +418,26 @@ export default function NewClaim() {
     setTextIntakeInput('')
 
     try {
-      const data = await api.extractTextIntake(raw, selectedLanguage)
-      setTranscript(data.transcript)
-      setFields(data.fields)
-      setMissingFields(data.missing_fields)
+      const data = await api.extractTextIntake(raw, effectiveSttLanguage)
+      const detectedLang =
+        data.assistant_language ||
+        data.detected_language ||
+        (selectedLanguage !== 'indic-auto' ? selectedLanguage : 'en-IN')
+
+      // Lock onto the user's first typed language for the entire conversation if 'indic-auto' was active
+      lockLanguageFromFirstTurn(detectedLang)
+
+      setTranscript((prev) => (prev ? `${prev} ${data.transcript}` : data.transcript))
+      const { merged, remainingMissing } = mergeExtractedFields(fields, data.fields)
+      setFields(merged)
+      setMissingFields(remainingMissing)
       setActiveMissingIndex(0)
 
       const userTurn: MessageTurn = {
         id: 'user-txt-' + Date.now(),
         sender: 'user',
         text: data.transcript,
-        language: data.detected_language,
+        language: detectedLang,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       }
 
@@ -373,11 +446,14 @@ export default function NewClaim() {
         sender: 'assistant',
         text: data.assistant_dialogue,
         audioText: data.assistant_speech_text,
-        language: data.assistant_language,
+        language: detectedLang,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       }
 
       setMessages((prev) => [...prev, userTurn, assistantTurn])
+      if (autoVoiceEnabled && data.assistant_speech_text) {
+        setTimeout(() => speakText(data.assistant_speech_text, detectedLang), 350)
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to extract fields from text.')
     }
@@ -428,13 +504,13 @@ export default function NewClaim() {
         blob,
         'answer.wav',
         isDemoMode,
-        selectedLanguage,
+        effectiveSttLanguage,
       )
       setIsProcessingAnswerVoice(false)
 
       const answerText = (resp.transcript || '').trim()
       if (answerText) {
-        handleApplyAnswer(answerText, 'voice')
+        handleApplyAnswer(answerText, 'voice', resp.fields, resp.detected_language)
       } else {
         setError('No speech detected in your answer. Please tap mic again or type in the box.')
       }
@@ -457,67 +533,180 @@ export default function NewClaim() {
     setAnswerRecordingSeconds(0)
   }
 
-  const handleApplyAnswer = (value: string, _source: 'voice' | 'text') => {
+  const getCompletionMessageByLang = (lang: string): { display: string; speech: string } => {
+    if (lang.startsWith('te')) {
+      const msg =
+        'ధన్యవాదాలు! మీ క్లెయిమ్ కి సంబంధించిన అన్ని 5 వివరాలు విజయవంతంగా నమోదయ్యాయి. ఇప్పుడు స్టెప్ 2 కి వెళ్లి వాహన డ్యామేజ్ ఫోటోలు లేదా వీడియోలు అప్లోడ్ చేయండి.'
+      return { display: msg, speech: msg }
+    }
+    if (lang.startsWith('kn')) {
+      const msg =
+        'ಧನ್ಯವಾದಗಳು! ನಿಮ್ಮ ಕ್ಲೈಮ್‌ನ ಎಲ್ಲಾ 5 ವಿವರಗಳನ್ನು ದಾಖಲಿಸಲಾಗಿದೆ. ಈಗ ಹಂತ 2 ಕ್ಕೆ ಮುಂದುವರಿದು ವಾಹನದ ಹಾನಿಯ ಫೋಟೋಗಳನ್ನು ಅಪ್‌ಲೋಡ್ ಮಾಡಿ.'
+      return { display: msg, speech: msg }
+    }
+    if (lang.startsWith('hi')) {
+      const msg =
+        'धन्यवाद! आपके क्लेम के सभी 5 विवरण दर्ज हो चुके हैं। अब स्टेप 2 पर जाएं और वाहन डैमेज के फोटो या वीडियो अपलोड करें।'
+      return { display: msg, speech: msg }
+    }
+    if (lang.startsWith('ta')) {
+      const msg =
+        'நன்றி! உங்கள் கோரிக்கையின் அனைத்து 5 விவரங்களும் பதிவு செய்யப்பட்டுள்ளன. இப்போது படி 2 க்குச் சென்று வாகன சேதப் புகைப்படங்களைப் பதிவேற்றவும்.'
+      return { display: msg, speech: msg }
+    }
+    if (lang.startsWith('mr')) {
+      const msg =
+        'धन्यवाद! तुमच्या क्लेमचे सर्व 5 तपशील नोंदवले गेले आहेत. कृपया आता स्टेप 2 वर जाऊन वाहनाच्या नुकसानीचे फोटो अपलोड करा.'
+      return { display: msg, speech: msg }
+    }
+    const msg =
+      'Thank you! All 5 core claim details have been recorded. Now proceed to Step 2 to upload or live-capture vehicle damage photos/videos for Evidence Integrity Screening.'
+    return { display: msg, speech: msg }
+  }
+
+  const handleApplyAnswer = async (
+    value: string,
+    _source: 'voice' | 'text',
+    extractedAnswerFields?: ClaimField[],
+    answerDetectedLang?: string | null,
+  ) => {
     const targetFieldName = missingFields[activeMissingIndex]
     if (!targetFieldName) return
 
-    setFields((prev) =>
-      prev.map((f) =>
-        f.name === targetFieldName
-          ? { ...f, value, confidence: 'high' as const, is_edited: false }
-          : f,
-      ),
-    )
+    const activeLang =
+      selectedLanguage !== 'indic-auto'
+        ? selectedLanguage
+        : lockedLanguage || answerDetectedLang || 'te-IN'
 
     const userAnsTurn: MessageTurn = {
       id: 'ans-' + Date.now(),
       sender: 'user',
       text: value,
+      language: activeLang,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     }
 
-    const nextMissingIndex = activeMissingIndex + 1
-    const hasMoreMissing = nextMissingIndex < missingFields.length
+    try {
+      // Strictly validate field type & normalize to English for insurer submission
+      const validation = await api.validateFieldAnswer(targetFieldName, value, activeLang)
+      const resolvedLang =
+        selectedLanguage !== 'indic-auto'
+          ? selectedLanguage
+          : lockedLanguage || validation.detected_language || activeLang
 
-    if (hasMoreMissing) {
-      setActiveMissingIndex(nextMissingIndex)
-      const nextFieldName = missingFields[nextMissingIndex]
-      const nextField = fields.find((f) => f.name === nextFieldName)
-      const nextQ = nextField?.follow_up_question || `Please provide the details for ${nextField?.label}.`
-
-      const nextAssistantTurn: MessageTurn = {
-        id: 'ast-' + Date.now(),
-        sender: 'assistant',
-        text: `Noted "${value}". Next: ${nextQ}`,
-        audioText: nextQ,
-        language: 'te-IN',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      if (!lockedLanguage && selectedLanguage === 'indic-auto') {
+        lockLanguageFromFirstTurn(resolvedLang)
       }
 
-      setMessages((prev) => [...prev, userAnsTurn, nextAssistantTurn])
-      if (autoVoiceEnabled) {
-        setTimeout(() => speakText(nextQ, 'te-IN'), 350)
-      }
-    } else {
-      setMissingFields([])
-      const completionText =
-        'Thank you! All 5 core claim details have been recorded. Now proceed to Step 2 to upload or live-capture vehicle damage photos/videos for Evidence Integrity Screening.'
-      const completionTe =
-        'ధన్యవాదాలు! మీ క్లెయిమ్ వివరాలు నమోదయ్యాయి. ఇప్పుడు వాహన డ్యామేజ్ ఫోటోలు లేదా వీడియోలు అప్లోడ్ చేయండి.'
-
-      const completionTurn: MessageTurn = {
-        id: 'comp-' + Date.now(),
-        sender: 'assistant',
-        text: completionText,
-        audioText: completionTe,
-        language: 'te-IN',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      let updatedFields = [...fields]
+      if (extractedAnswerFields && extractedAnswerFields.length > 0) {
+        updatedFields = mergeExtractedFields(updatedFields, extractedAnswerFields).merged
       }
 
-      setMessages((prev) => [...prev, userAnsTurn, completionTurn])
-      if (autoVoiceEnabled) {
-        setTimeout(() => speakText(completionTe, 'te-IN'), 350)
+      // Apply any routed English fields detected in the user's answer (e.g. if user spoke KA-34-223 during location question, it routes KA-34-223 to policy_reference!)
+      if (validation.routed_fields && Object.keys(validation.routed_fields).length > 0) {
+        updatedFields = updatedFields.map((f) => {
+          const routedVal = validation.routed_fields[f.name]
+          if (routedVal) {
+            return { ...f, value: routedVal, confidence: 'high' as const, is_edited: false, follow_up_question: null }
+          }
+          return f
+        })
       }
+
+      // If the user's input was NOT valid for the currently asked targetFieldName (e.g. they asked a question "ಸಿ ಎಂ ಎಂ ಅಂದರೆ ಏನು?" or gave a vehicle number instead of location)
+      if (!validation.is_valid_for_target || !validation.english_value) {
+        setFields(updatedFields)
+        const remainingNow = updatedFields
+          .filter((f) => f.confidence === 'missing' || !f.value)
+          .map((f) => f.name)
+        setMissingFields(remainingNow)
+        setActiveMissingIndex(0)
+
+        const errPrompt =
+          validation.error_prompt ||
+          `Please provide a valid ${targetFieldName.replace('_', ' ')}.`
+
+        const clarifyTurn: MessageTurn = {
+          id: 'clarify-' + Date.now(),
+          sender: 'assistant',
+          text: errPrompt,
+          audioText: errPrompt,
+          language: resolvedLang,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        }
+        setMessages((prev) => [...prev, userAnsTurn, clarifyTurn])
+        if (autoVoiceEnabled) {
+          setTimeout(() => speakText(errPrompt, resolvedLang), 350)
+        }
+        return
+      }
+
+      // Valid answer for targetFieldName -> store the clean English normalized value!
+      const finalEnglishValue = validation.english_value
+      updatedFields = updatedFields.map((f) =>
+        f.name === targetFieldName
+          ? { ...f, value: finalEnglishValue, confidence: 'high' as const, is_edited: false, follow_up_question: null }
+          : f,
+      )
+
+      const remaining = updatedFields
+        .filter((f) => f.confidence === 'missing' || !f.value)
+        .map((f) => f.name)
+
+      setFields(updatedFields)
+      setTranscript((prev) => (prev ? `${prev}. ${finalEnglishValue}` : finalEnglishValue))
+
+      if (remaining.length > 0) {
+        setMissingFields(remaining)
+        setActiveMissingIndex(0)
+        const nextFieldName = remaining[0]
+        const nextField = updatedFields.find((f) => f.name === nextFieldName)
+        const nextQ =
+          nextField?.follow_up_question || `Please provide the details for ${nextField?.label}.`
+
+        const ackPrefix = resolvedLang.startsWith('te')
+          ? `నమోదైంది ("${finalEnglishValue}"). తదుపరి ప్రశ్న:`
+          : resolvedLang.startsWith('kn')
+          ? `ದಾಖಲಾಗಿದೆ ("${finalEnglishValue}"). ಮುಂದಿನ ಪ್ರಶ್ನೆ:`
+          : resolvedLang.startsWith('hi')
+          ? `दर्ज किया गया ("${finalEnglishValue}")। अगला प्रश्न:`
+          : `Noted "${finalEnglishValue}". Next:`
+
+        const nextAssistantTurn: MessageTurn = {
+          id: 'ast-' + Date.now(),
+          sender: 'assistant',
+          text: `${ackPrefix} ${nextQ}`,
+          audioText: nextQ,
+          language: resolvedLang,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        }
+
+        setMessages((prev) => [...prev, userAnsTurn, nextAssistantTurn])
+        if (autoVoiceEnabled) {
+          setTimeout(() => speakText(nextQ, resolvedLang), 350)
+        }
+      } else {
+        setMissingFields([])
+        setActiveMissingIndex(0)
+        const comp = getCompletionMessageByLang(resolvedLang)
+
+        const completionTurn: MessageTurn = {
+          id: 'comp-' + Date.now(),
+          sender: 'assistant',
+          text: comp.display,
+          audioText: comp.speech,
+          language: resolvedLang,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        }
+
+        setMessages((prev) => [...prev, userAnsTurn, completionTurn])
+        if (autoVoiceEnabled) {
+          setTimeout(() => speakText(comp.speech, resolvedLang), 350)
+        }
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to validate answer.')
     }
   }
 
@@ -549,21 +738,16 @@ export default function NewClaim() {
       try {
         const storedUser = getStoredUser()
         const created = await api.createClaim({
-          customer_id: storedUser?.customer_id || 'USR-100001',
-          policy_holder_name: storedUser?.name || 'Rahul Sharma',
+          customer_id: storedUser?.customer_id,
+          insurer_name: storedUser?.declared_insurer || 'Bharat General Insurance',
           policy_reference: fieldMap.policy_reference,
           incident_location: fieldMap.incident_location,
           incident_date: fieldMap.incident_date,
-          incident_time: incidentTime,
           vehicle_type: fieldMap.vehicle_type,
-          vehicle_registration: vehicleRegistration,
           damage_description: fieldMap.damage_description,
-          drivable_status: drivableStatus,
           injuries_reported: injuriesReported,
-          police_fir_info: policeFirInfo,
+          people_involved: `Policyholder (${storedUser?.name || 'Driver'})`,
           transcript: transcript || 'Customer conversational intake completed.',
-          language: selectedLanguage,
-          edited_fields: fields.filter((f) => f.is_edited).map((f) => f.name),
         })
         setActiveClaimId(created.id)
       } catch (err: any) {
@@ -741,14 +925,14 @@ export default function NewClaim() {
 
     const fieldMap = Object.fromEntries(fields.map((f) => [f.name, f.value || '']))
     try {
-      await api.confirmClaim(activeClaimId, {
-        confirmed: true,
-        edited_fields: fieldMap,
-        vehicle_registration: vehicleRegistration,
-        incident_time: incidentTime,
-        drivable_status: drivableStatus,
+      await api.updateAndConfirmClaim(activeClaimId, {
+        policy_reference: fieldMap.policy_reference,
+        incident_location: fieldMap.incident_location,
+        incident_date: fieldMap.incident_date,
+        vehicle_type: fieldMap.vehicle_type,
+        damage_description: fieldMap.damage_description,
         injuries_reported: injuriesReported,
-        police_fir_info: policeFirInfo,
+        customer_confirmation: true,
       })
       await api.generateReport(activeClaimId)
       navigate(`/claims/${activeClaimId}`)
@@ -770,9 +954,9 @@ export default function NewClaim() {
       <div className="bg-white border border-gray-200 rounded-3xl p-4 shadow-xs flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-2 sm:gap-4">
           {[
-            { step: 1, title: '1. Multilingual AI Intake', sub: 'Steps 2–4: Voice/Text & Follow-ups' },
-            { step: 2, title: '2. Evidence & Integrity Engine', sub: 'Steps 5–6: Live Camera, C2PA & pHash' },
-            { step: 3, title: '3. Review & Generate Dossier', sub: 'Steps 7–9: 9-Section Report & Gateway' },
+            { step: 1, title: t('step1_title'), sub: t('step1_sub') },
+            { step: 2, title: t('step2_title'), sub: t('step2_sub') },
+            { step: 3, title: t('step3_title'), sub: t('step3_sub') },
           ].map((item, idx) => {
             const active = wizardStep === item.step
             const done = wizardStep > item.step
@@ -856,27 +1040,38 @@ export default function NewClaim() {
             <div>
               <div className="flex items-center gap-2.5">
                 <h1 className="text-xl font-bold text-gray-900">
-                  Step 1: Multilingual Conversational Claim Intake
+                  {t('step1_heading')}
                 </h1>
                 <ProviderBadge isMock={isDemoMode} model={activeModel} />
               </div>
               <p className="text-xs text-gray-500 mt-1">
-                Speak via microphone (Gnani Prisma ASR + Timbre TTS) or type your incident in Telugu, Kannada, Hindi, or English
+                {t('step1_desc')}
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2.5">
-              <select
-                value={selectedLanguage}
-                onChange={(e) => setSelectedLanguage(e.target.value)}
-                className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-1.5 text-xs font-semibold text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                {INDIAN_LANGUAGES.map((l) => (
-                  <option key={l.code} value={l.code}>
-                    {l.label}
-                  </option>
-                ))}
-              </select>
+              <div className="flex items-center gap-1.5">
+                <select
+                  value={selectedLanguage}
+                  onChange={(e) => {
+                    const val = e.target.value
+                    setSelectedLanguage(val)
+                    setLockedLanguage(val === 'indic-auto' ? null : val)
+                  }}
+                  className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-1.5 text-xs font-semibold text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  {INDIAN_LANGUAGES.map((l) => (
+                    <option key={l.code} value={l.code}>
+                      {l.label}
+                    </option>
+                  ))}
+                </select>
+                {selectedLanguage === 'indic-auto' && lockedLanguage && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-emerald-50 border border-emerald-200 text-[11px] font-bold text-emerald-800">
+                    🔒 Active: {lockedLanguage}
+                  </span>
+                )}
+              </div>
 
               <button
                 type="button"
@@ -1079,11 +1274,11 @@ export default function NewClaim() {
                           onClick={startRecording}
                           className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-7 py-3 rounded-2xl bg-blue-600 text-white font-bold text-xs shadow-xs hover:bg-blue-700 transition-all"
                         >
-                          <Mic className="w-4 h-4" /> Speak Your Claim (Press to Talk)
+                          <Mic className="w-4 h-4" /> {t('speak_claim_btn')}
                         </button>
 
                         <label className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-3 rounded-2xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors cursor-pointer text-xs">
-                          <Upload className="w-4 h-4 text-gray-500" /> Upload Audio File
+                          <Upload className="w-4 h-4 text-gray-500" /> {t('upload_audio_btn')}
                           <input
                             ref={fileInputRef}
                             type="file"
@@ -1127,7 +1322,7 @@ export default function NewClaim() {
                         value={textIntakeInput}
                         onChange={(e) => setTextIntakeInput(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && handleProcessTextIntake()}
-                        placeholder="Or type your accident explanation in Kannada, Telugu, Hindi, or English..."
+                        placeholder={t('type_placeholder')}
                         className="flex-1 rounded-xl border border-gray-300 px-3.5 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
                       />
                       <button
@@ -1136,7 +1331,7 @@ export default function NewClaim() {
                         disabled={!textIntakeInput.trim()}
                         className="px-4 py-2 rounded-xl bg-gray-900 text-white text-xs font-semibold disabled:opacity-40 hover:bg-gray-800"
                       >
-                        Extract
+                        {t('extract_btn')}
                       </button>
                     </div>
                   </>
@@ -1144,7 +1339,7 @@ export default function NewClaim() {
                   <div className="bg-blue-50/60 rounded-2xl border border-blue-200 p-4">
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-xs font-bold text-blue-900">
-                        Answering Follow-Up: {currentMissingField.label}
+                        {t('answering_followup')}: {t(`field_${currentMissingField.name}`)}
                       </span>
                       <span className="text-[10px] bg-blue-200/80 text-blue-900 font-bold px-2 py-0.5 rounded-full">
                         Question {activeMissingIndex + 1} of {missingFields.length}
@@ -1158,7 +1353,7 @@ export default function NewClaim() {
                           onClick={startAnswerRecording}
                           className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 text-white font-bold text-xs shadow-xs hover:bg-emerald-700 shrink-0"
                         >
-                          <Mic className="w-4 h-4" /> 🎙️ Speak Answer
+                          <Mic className="w-4 h-4" /> {t('speak_answer_btn')}
                         </button>
 
                         <div className="w-full flex-1">
@@ -1177,14 +1372,14 @@ export default function NewClaim() {
                             onClick={stopAnswerRecording}
                             className="px-4 py-1.5 rounded-xl bg-red-600 text-white text-xs font-bold"
                           >
-                            <Square className="w-3.5 h-3.5 fill-white inline mr-1" /> Done Speaking
+                            <Square className="w-3.5 h-3.5 fill-white inline mr-1" /> {t('done_speaking_btn')}
                           </button>
                           <button
                             type="button"
                             onClick={cancelAnswerRecording}
                             className="px-3 py-1.5 rounded-xl border border-gray-300 text-xs text-gray-600"
                           >
-                            Cancel
+                            {t('cancel_btn')}
                           </button>
                         </div>
                       </div>
@@ -1198,7 +1393,7 @@ export default function NewClaim() {
                   <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-emerald-50 border border-emerald-200 rounded-2xl p-4">
                     <div className="flex items-center gap-2 text-emerald-800 text-xs font-bold">
                       <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0" />
-                      <span>All 5 core claim fields captured! Proceed to Evidence &amp; Live Camera Screening.</span>
+                      <span>{t('all_captured_banner')}</span>
                     </div>
 
                     <div className="flex items-center gap-2 w-full sm:w-auto">
@@ -1209,10 +1404,18 @@ export default function NewClaim() {
                           setHasStartedIntake(false)
                           setTranscript('')
                           setMissingFields([])
+                          setLockedLanguage(null)
+                          setFields([
+                            { name: 'policy_reference', label: 'Policy / Vehicle Number', value: null, confidence: 'missing', is_edited: false, follow_up_question: null },
+                            { name: 'vehicle_type', label: 'Vehicle Type', value: null, confidence: 'missing', is_edited: false, follow_up_question: null },
+                            { name: 'incident_location', label: 'Incident Location', value: null, confidence: 'missing', is_edited: false, follow_up_question: null },
+                            { name: 'incident_date', label: 'Incident Date', value: null, confidence: 'missing', is_edited: false, follow_up_question: null },
+                            { name: 'damage_description', label: 'Damage Description', value: null, confidence: 'missing', is_edited: false, follow_up_question: null },
+                          ])
                         }}
                         className="px-3 py-2 text-xs font-semibold text-gray-600 hover:text-gray-900 border rounded-xl bg-white"
                       >
-                        Reset
+                        {t('reset_btn')}
                       </button>
                       <button
                         type="button"
@@ -1220,7 +1423,7 @@ export default function NewClaim() {
                         disabled={isSubmitting}
                         className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 px-5 py-2.5 rounded-xl bg-brand-600 text-white font-bold text-xs shadow-xs hover:bg-brand-700"
                       >
-                        {isSubmitting ? 'Initializing Claim...' : 'Next: Evidence Screening'}
+                        {isSubmitting ? 'Initializing Claim...' : t('next_evidence_btn')}
                         <ChevronRight className="w-4 h-4" />
                       </button>
                     </div>
@@ -1233,12 +1436,12 @@ export default function NewClaim() {
             <div className="lg:col-span-5 bg-white rounded-3xl border border-gray-200 p-6 shadow-xs space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="font-bold text-sm text-gray-900">Extracted Claim Fields (Step 3)</h3>
-                  <p className="text-[11px] text-gray-400">Auto-filled from speech/text; click pencil to edit</p>
+                  <h3 className="font-bold text-sm text-gray-900">{t('extracted_fields_title')}</h3>
+                  <p className="text-[11px] text-gray-400">{t('extracted_fields_sub')}</p>
                 </div>
                 <div className="flex items-center gap-1.5 text-xs font-bold px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
                   <ShieldCheck className="w-4 h-4" />
-                  <span>{capturedCount} of 5 Captured</span>
+                  <span>{capturedCount} / 5 {t('captured_badge')}</span>
                 </div>
               </div>
 
@@ -1255,10 +1458,14 @@ export default function NewClaim() {
                 {fields.map((field) => {
                   const isMissing = field.confidence === 'missing' || !field.value
                   const isCurrentAnswering = field.name === currentMissingFieldName
+                  const localizedField = {
+                    ...field,
+                    label: t(`field_${field.name}`),
+                  }
                   return (
                     <FieldRow
                       key={field.name}
-                      field={field}
+                      field={localizedField}
                       isMissing={isMissing}
                       isAnswering={isCurrentAnswering}
                       onEdit={handleEditField}
@@ -1274,7 +1481,7 @@ export default function NewClaim() {
                   disabled={isSubmitting}
                   className="w-full inline-flex items-center justify-center gap-2 py-3 rounded-2xl bg-brand-600 text-white font-bold text-xs shadow-xs hover:bg-brand-700 transition-colors"
                 >
-                  Continue to Step 2: Upload &amp; Screen Evidence <ChevronRight className="w-4 h-4" />
+                  {t('continue_step2_btn')} <ChevronRight className="w-4 h-4" />
                 </button>
               )}
             </div>
@@ -1373,12 +1580,12 @@ export default function NewClaim() {
                       <div className="text-[11px] font-bold text-emerald-800 uppercase">
                         Server-Assigned Capture Prompts ({captureSession.session_id}):
                       </div>
-                      {captureSession.instructions.map((inst) => (
-                        <div key={inst.step} className="text-xs text-gray-700 flex items-center gap-1.5">
+                      {captureSession.instructions.map((inst, idx) => (
+                        <div key={idx} className="text-xs text-gray-700 flex items-center gap-1.5">
                           <span className="w-4 h-4 rounded-full bg-emerald-600 text-white text-[10px] font-bold flex items-center justify-center shrink-0">
-                            {inst.step}
+                            {idx + 1}
                           </span>
-                          <span>{inst.prompt}</span>
+                          <span>{typeof inst === 'string' ? inst : (inst as any).prompt}</span>
                         </div>
                       ))}
                     </div>
@@ -1506,16 +1713,16 @@ export default function NewClaim() {
                     const isFlagged = scr?.requires_human_review
                     return (
                       <div
-                        key={ev.asset_id}
+                        key={ev.evidence_id}
                         className={`rounded-2xl border p-4 flex gap-4 ${
                           isFlagged
                             ? 'bg-amber-50/60 border-amber-300'
                             : 'bg-white border-gray-200'
                         }`}
                       >
-                        {ev.media_type === 'image' ? (
+                        {ev.media_type === 'image' && activeClaimId ? (
                           <img
-                            src={api.getEvidenceFileUrl(ev.asset_id)}
+                            src={api.getEvidenceFileUrl(activeClaimId, ev.evidence_id)}
                             alt={ev.label}
                             className="w-24 h-24 rounded-xl object-cover border border-gray-200 shrink-0 bg-gray-100"
                           />
@@ -1547,14 +1754,16 @@ export default function NewClaim() {
                               <p className="text-xs font-semibold text-gray-800">
                                 {scr.screening_outcome_label}
                               </p>
-                              <p className="text-[11px] text-gray-600">{scr.provenance_summary}</p>
+                              <p className="text-[11px] text-gray-600">
+                                {scr.provenance_result} &rarr; <strong>{scr.provenance_system_response}</strong>
+                              </p>
                               <div className="text-[10px] font-mono text-gray-500 space-y-0.5 pt-1">
                                 <div className="truncate">
                                   SHA-256: {scr.sha256_hash.slice(0, 24)}...
                                 </div>
-                                {scr.phash_hex && (
+                                {scr.perceptual_hash && (
                                   <div>
-                                    64-bit DCT pHash: <span className="font-bold">{scr.phash_hex}</span>
+                                    64-bit DCT pHash: <span className="font-bold">{scr.perceptual_hash}</span>
                                     {scr.hamming_distance !== null &&
                                       scr.hamming_distance !== undefined && (
                                         <span className="ml-2 text-amber-800 font-bold">
@@ -1566,9 +1775,9 @@ export default function NewClaim() {
                                 <div>
                                   Duplicate Check:{' '}
                                   <strong className="uppercase">{scr.duplicate_status}</strong>
-                                  {scr.matched_claim_id && (
+                                  {scr.matched_claim_reference && (
                                     <span className="ml-1 text-red-700">
-                                      (Matched {scr.matched_claim_id})
+                                      (Matched {scr.matched_claim_reference})
                                     </span>
                                   )}
                                 </div>

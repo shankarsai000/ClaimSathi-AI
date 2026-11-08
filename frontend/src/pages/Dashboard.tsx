@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { api, getStoredUser, clearStoredAuth } from '../api'
-import type { VaultSummaryResponse, UserConsentInput } from '../types'
+import { useAppSettings } from '../i18n'
+import type { VaultSummaryResponse } from '../types'
 import Spinner from '../components/Spinner'
 import StatusBadge from '../components/StatusBadge'
 import DemoBadge from '../components/DemoBadge'
@@ -9,10 +10,7 @@ import {
   PlusCircle,
   FileText,
   AlertCircle,
-  UserCheck,
   ShieldCheck,
-  KeyRound,
-  UserPlus,
   Download,
   FileCode,
   History,
@@ -22,31 +20,22 @@ import {
 } from 'lucide-react'
 
 export default function Dashboard() {
+  const navigate = useNavigate()
+  const { t, setIsSettingsOpen } = useAppSettings()
   const [vault, setVault] = useState<VaultSummaryResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [authTab, setAuthTab] = useState<'none' | 'login' | 'register'>('none')
-
-  // Login form state
-  const [loginIdentifier, setLoginIdentifier] = useState('rahul@example.com')
-  const [loginPassword, setLoginPassword] = useState('Rahul@2026')
-  const [loginOtp, setLoginOtp] = useState('123456')
-  const [useOtp, setUseOtp] = useState(false)
-  const [authLoading, setAuthLoading] = useState(false)
-
-  // Register form state
-  const [regName, setRegName] = useState('')
-  const [regEmail, setRegEmail] = useState('')
-  const [regPhone, setRegPhone] = useState('')
-  const [regPassword, setRegPassword] = useState('')
-  const [regLang, setRegLang] = useState('kn-IN')
 
   const loadVault = async () => {
     setLoading(true)
     setError('')
     try {
       const current = getStoredUser()
-      const data = await api.getVault(current?.customer_id)
+      if (!current) {
+        navigate('/login', { replace: true })
+        return
+      }
+      const data = await api.getVault(current.customer_id)
       setVault(data)
     } catch (e: any) {
       setError(e.message || 'Failed to load Customer Claims Vault.')
@@ -62,292 +51,36 @@ export default function Dashboard() {
     return () => window.removeEventListener('claimsathi-auth-change', onAuthChange)
   }, [])
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setAuthLoading(true)
-    setError('')
-    try {
-      await api.login({
-        identifier: loginIdentifier,
-        password: useOtp ? undefined : loginPassword,
-        otp: useOtp ? loginOtp : undefined,
-      })
-      setAuthTab('none')
-      await loadVault()
-    } catch (err: any) {
-      setError(err.message)
-    } finally {
-      setAuthLoading(false)
-    }
-  }
-
-  const handleQuickRahulLogin = async () => {
-    setAuthLoading(true)
-    setError('')
-    try {
-      await api.login({ identifier: 'USR-100001', demo_quick_login: true })
-      setAuthTab('none')
-      await loadVault()
-    } catch (err: any) {
-      setError(err.message)
-    } finally {
-      setAuthLoading(false)
-    }
-  }
-
-  const handleRegister = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setAuthLoading(true)
-    setError('')
-    try {
-      await api.register({
-        name: regName,
-        email: regEmail,
-        phone: regPhone,
-        password: regPassword || 'ClaimSathi@2026',
-        preferred_language: regLang,
-        consents: {
-          ai_assistance_accepted: true,
-          media_storage_accepted: true,
-          fraud_screening_accepted: true,
-          privacy_policy_accepted: true,
-        },
-      })
-      setAuthTab('none')
-      setRegName('')
-      setRegEmail('')
-      setRegPhone('')
-      setRegPassword('')
-      await loadVault()
-    } catch (err: any) {
-      setError(err.message)
-    } finally {
-      setAuthLoading(false)
-    }
-  }
-
-  const handleToggleConsent = async (key: keyof UserConsentInput) => {
-    if (!vault?.user) return
-    const updated: UserConsentInput = {
-      ...vault.user.consents,
-      [key]: !vault.user.consents[key],
-    }
-    try {
-      await api.updateConsent(updated)
-      setVault({
-        ...vault,
-        user: { ...vault.user, consents: updated },
-      })
-    } catch (err: any) {
-      setError(err.message)
-    }
-  }
-
   return (
     <div className="space-y-6">
       {/* ── TOP HEADER ── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-bold text-gray-900">Customer Claims Vault</h1>
+            <h1 className="text-2xl font-bold text-gray-900">{t('vault_title')}</h1>
             <DemoBadge />
           </div>
           <p className="text-sm text-gray-500 mt-0.5">
-            Step 1 &amp; Step 9: Persistent customer account, consent management, archived claim dossiers &amp; audit trail
+            {t('vault_subtitle')}
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
           <button
             type="button"
-            onClick={() => setAuthTab(authTab === 'login' ? 'none' : 'login')}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-gray-300 bg-white text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors"
+            onClick={() => setIsSettingsOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-white border border-gray-200 text-gray-700 text-xs font-bold hover:bg-gray-50 transition-colors"
           >
-            <KeyRound className="w-3.5 h-3.5 text-blue-600" />
-            Switch / Login Account
-          </button>
-          <button
-            type="button"
-            onClick={() => setAuthTab(authTab === 'register' ? 'none' : 'register')}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-gray-300 bg-white text-gray-700 text-xs font-semibold hover:bg-gray-50 transition-colors"
-          >
-            <UserPlus className="w-3.5 h-3.5 text-emerald-600" />
-            Register New Customer
+            ⚙️ {t('nav_settings')}
           </button>
           <Link
             to="/claims/new"
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-brand-600 text-white text-xs font-bold hover:bg-brand-700 transition-colors shadow-xs"
+            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-brand-600 text-white text-xs font-bold hover:bg-brand-700 transition-colors shadow-xs"
           >
-            <PlusCircle className="w-4 h-4" /> Start New Claim Wizard
+            <PlusCircle className="w-4 h-4" /> {t('start_new_claim')}
           </Link>
         </div>
       </div>
-
-      {/* ── LOGIN / REGISTER DRAWER (PHASE 1) ── */}
-      {authTab === 'login' && (
-        <div className="bg-white rounded-2xl border border-blue-200 p-6 shadow-sm">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h2 className="text-base font-bold text-gray-900">Customer Account Login (Phase 1)</h2>
-              <p className="text-xs text-gray-500">
-                Sign in with Email, Phone, or Customer ID (e.g. <code>USR-100001</code> / <code>rahul@example.com</code>)
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={handleQuickRahulLogin}
-              disabled={authLoading}
-              className="px-3.5 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold hover:bg-emerald-100"
-            >
-              ⚡ 1-Click Login as Rahul (USR-100001)
-            </button>
-          </div>
-
-          <form onSubmit={handleLogin} className="grid sm:grid-cols-3 gap-4 items-end">
-            <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1">
-                Email / Phone / Customer ID
-              </label>
-              <input
-                type="text"
-                required
-                value={loginIdentifier}
-                onChange={(e) => setLoginIdentifier(e.target.value)}
-                className="w-full rounded-xl border border-gray-300 px-3 py-2 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                placeholder="rahul@example.com or USR-100001"
-              />
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="text-xs font-semibold text-gray-600">
-                  {useOtp ? 'Demo OTP (use 123456)' : 'Password'}
-                </label>
-                <button
-                  type="button"
-                  onClick={() => setUseOtp(!useOtp)}
-                  className="text-[11px] text-blue-600 font-semibold hover:underline"
-                >
-                  {useOtp ? 'Use Password instead' : 'Use OTP (123456)'}
-                </button>
-              </div>
-              {useOtp ? (
-                <input
-                  type="text"
-                  required
-                  value={loginOtp}
-                  onChange={(e) => setLoginOtp(e.target.value)}
-                  className="w-full rounded-xl border border-gray-300 px-3 py-2 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                  placeholder="123456"
-                />
-              ) : (
-                <input
-                  type="password"
-                  required
-                  value={loginPassword}
-                  onChange={(e) => setLoginPassword(e.target.value)}
-                  className="w-full rounded-xl border border-gray-300 px-3 py-2 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                  placeholder="Rahul@2026"
-                />
-              )}
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="submit"
-                disabled={authLoading}
-                className="px-5 py-2 rounded-xl bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 disabled:opacity-50"
-              >
-                {authLoading ? 'Signing in...' : 'Sign In'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setAuthTab('none')}
-                className="px-3 py-2 rounded-xl border border-gray-200 text-xs text-gray-600 hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {authTab === 'register' && (
-        <div className="bg-white rounded-2xl border border-emerald-200 p-6 shadow-sm">
-          <h2 className="text-base font-bold text-gray-900 mb-1">
-            Register New Customer Account (Generates Unique USR-XXXXXX ID)
-          </h2>
-          <p className="text-xs text-gray-500 mb-4">
-            Creates a new customer profile in SQLite with full consent records and an isolated Claims Vault.
-          </p>
-
-          <form onSubmit={handleRegister} className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
-            <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1">Full Name</label>
-              <input
-                type="text"
-                required
-                value={regName}
-                onChange={(e) => setRegName(e.target.value)}
-                placeholder="Priya Nair"
-                className="w-full rounded-xl border border-gray-300 px-3 py-2 text-xs"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1">Email</label>
-              <input
-                type="email"
-                required
-                value={regEmail}
-                onChange={(e) => setRegEmail(e.target.value)}
-                placeholder="priya@example.com"
-                className="w-full rounded-xl border border-gray-300 px-3 py-2 text-xs"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1">Phone Number</label>
-              <input
-                type="text"
-                required
-                value={regPhone}
-                onChange={(e) => setRegPhone(e.target.value)}
-                placeholder="+91-9845012345"
-                className="w-full rounded-xl border border-gray-300 px-3 py-2 text-xs"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1">Preferred Language</label>
-              <select
-                value={regLang}
-                onChange={(e) => setRegLang(e.target.value)}
-                className="w-full rounded-xl border border-gray-300 px-3 py-2 text-xs bg-white"
-              >
-                <option value="kn-IN">Kannada (kn-IN)</option>
-                <option value="te-IN">Telugu (te-IN)</option>
-                <option value="hi-IN">Hindi (hi-IN)</option>
-                <option value="ta-IN">Tamil (ta-IN)</option>
-                <option value="en-IN">English (en-IN)</option>
-              </select>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="submit"
-                disabled={authLoading}
-                className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700"
-              >
-                {authLoading ? 'Creating...' : 'Create Account'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setAuthTab('none')}
-                className="px-3 py-2 rounded-xl border border-gray-200 text-xs text-gray-600"
-              >
-                Cancel
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
 
       {/* ── ERROR ALERT ── */}
       {error && (
@@ -380,8 +113,8 @@ export default function Dashboard() {
                         </span>
                       </div>
                       <p className="text-xs text-gray-500 mt-0.5">
-                        {vault.user.email} &bull; {vault.user.phone} &bull; Preferred Language:{' '}
-                        <strong className="text-gray-700">{vault.user.preferred_language}</strong>
+                        {vault.user.email} &bull; {vault.user.phone} &bull; Declared Insurer:{' '}
+                        <strong className="text-gray-700">{vault.user.declared_insurer}</strong>
                       </p>
                     </div>
                   </div>
@@ -390,51 +123,56 @@ export default function Dashboard() {
                     type="button"
                     onClick={() => {
                       clearStoredAuth()
-                      setAuthTab('login')
+                      navigate('/login', { replace: true })
                     }}
                     className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-red-600 font-medium"
                   >
-                    <LogOut className="w-3.5 h-3.5" /> Switch User
+                    <LogOut className="w-3.5 h-3.5" /> Switch Account
                   </button>
                 </div>
 
-                {/* Consent & Privacy Checkboxes */}
+                {/* Consent & Privacy Badges */}
                 <div className="mt-5 pt-4 border-t border-gray-100">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-bold text-gray-700 uppercase tracking-wider flex items-center gap-1.5">
                       <ShieldCheck className="w-4 h-4 text-emerald-600" />
                       Recorded Customer Consents &amp; Privacy Preferences
                     </span>
-                    <span className="text-[11px] text-gray-400">Click any badge to update consent</span>
                   </div>
-                  <div className="grid sm:grid-cols-2 md:grid-cols-4 gap-2">
+                  <div className="grid sm:grid-cols-3 gap-2">
                     {[
-                      { key: 'ai_assistance_accepted', label: 'AI Voice & Text Intake' },
-                      { key: 'media_storage_accepted', label: 'Evidence Media Vault' },
-                      { key: 'fraud_screening_accepted', label: 'C2PA / pHash Screening' },
-                      { key: 'privacy_policy_accepted', label: 'Privacy & Audit Policy' },
-                    ].map(({ key, label }) => {
-                      const active = vault.user.consents[key as keyof UserConsentInput]
-                      return (
-                        <button
-                          key={key}
-                          type="button"
-                          onClick={() => handleToggleConsent(key as keyof UserConsentInput)}
-                          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-left text-xs font-medium transition-all ${
-                            active
-                              ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
-                              : 'bg-gray-50 border-gray-200 text-gray-400'
+                      {
+                        key: 'data_processing_consent',
+                        label: 'AI Voice & Text Processing',
+                        active: vault.user.consents?.data_processing_consent ?? true,
+                      },
+                      {
+                        key: 'evidence_screening_consent',
+                        label: 'C2PA / SynthID / pHash Screening',
+                        active: vault.user.consents?.evidence_screening_consent ?? true,
+                      },
+                      {
+                        key: 'retention_policy_acknowledged',
+                        label: 'Vault Retention & Audit Policy',
+                        active: vault.user.consents?.retention_policy_acknowledged ?? true,
+                      },
+                    ].map(({ key, label, active }) => (
+                      <div
+                        key={key}
+                        className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-left text-xs font-medium ${
+                          active
+                            ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
+                            : 'bg-gray-50 border-gray-200 text-gray-400'
+                        }`}
+                      >
+                        <CheckCircle2
+                          className={`w-3.5 h-3.5 shrink-0 ${
+                            active ? 'text-emerald-600' : 'text-gray-300'
                           }`}
-                        >
-                          <CheckCircle2
-                            className={`w-3.5 h-3.5 shrink-0 ${
-                              active ? 'text-emerald-600' : 'text-gray-300'
-                            }`}
-                          />
-                          <span className="truncate">{label}</span>
-                        </button>
-                      )
-                    })}
+                        />
+                        <span className="truncate">{label}</span>
+                      </div>
+                    ))}
                   </div>
                 </div>
               </div>
@@ -448,7 +186,7 @@ export default function Dashboard() {
                   <div className="grid grid-cols-2 gap-3 mt-3">
                     <div className="bg-gray-50 rounded-xl p-3 border border-gray-100">
                       <p className="text-[11px] text-gray-500">Total Claims in Vault</p>
-                      <p className="text-2xl font-bold text-brand-700 mt-0.5">{vault.total_claims}</p>
+                      <p className="text-2xl font-bold text-brand-700 mt-0.5">{vault.total_cases}</p>
                     </div>
                     <div className="bg-gray-50 rounded-xl p-3 border border-gray-100">
                       <p className="text-[11px] text-gray-500">Customer ID</p>
@@ -503,7 +241,7 @@ export default function Dashboard() {
                         <th className="text-left px-4 py-3">Vehicle</th>
                         <th className="text-left px-4 py-3">Incident Location &amp; Date</th>
                         <th className="text-left px-4 py-3">Status</th>
-                        <th className="text-left px-4 py-3">Report Version</th>
+                        <th className="text-left px-4 py-3">Insurer</th>
                         <th className="text-right px-5 py-3">Dossier &amp; Exports</th>
                       </tr>
                     </thead>
@@ -521,14 +259,7 @@ export default function Dashboard() {
                           <td className="px-4 py-3.5 font-mono text-xs text-gray-700">
                             {c.policy_reference}
                           </td>
-                          <td className="px-4 py-3.5 text-gray-700 capitalize">
-                            {c.vehicle_type}
-                            {c.vehicle_registration && c.vehicle_registration !== 'Pending verification' && (
-                              <span className="ml-1.5 text-xs text-gray-400 font-mono">
-                                ({c.vehicle_registration})
-                              </span>
-                            )}
-                          </td>
+                          <td className="px-4 py-3.5 text-gray-700 capitalize">{c.vehicle_type}</td>
                           <td className="px-4 py-3.5 text-gray-700 text-xs">
                             <div className="font-medium text-gray-900">{c.incident_location}</div>
                             <div className="text-gray-400">{c.incident_date}</div>
@@ -536,8 +267,8 @@ export default function Dashboard() {
                           <td className="px-4 py-3.5">
                             <StatusBadge status={c.status} />
                           </td>
-                          <td className="px-4 py-3.5 text-xs text-gray-600 font-semibold">
-                            v{c.report_version || '1.0'}
+                          <td className="px-4 py-3.5 text-xs text-gray-600 font-medium">
+                            {c.insurer_name}
                           </td>
                           <td className="px-5 py-3.5 text-right">
                             <div className="inline-flex items-center gap-2">
@@ -576,14 +307,14 @@ export default function Dashboard() {
             </div>
 
             {/* ── AUDIT TRAIL LOGS (PHASE 1 & 6) ── */}
-            {vault.recent_audit_logs && vault.recent_audit_logs.length > 0 && (
+            {vault.audit_logs && vault.audit_logs.length > 0 && (
               <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-xs">
                 <h3 className="font-bold text-gray-900 text-sm flex items-center gap-2 mb-3">
                   <History className="w-4 h-4 text-blue-600" />
                   Customer Vault Audit Trail (Real-Time Security &amp; Provenance Log)
                 </h3>
                 <div className="space-y-2 max-h-56 overflow-y-auto pr-2">
-                  {vault.recent_audit_logs.map((log) => (
+                  {vault.audit_logs.map((log) => (
                     <div
                       key={log.log_id}
                       className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs bg-gray-50 rounded-xl px-3.5 py-2 border border-gray-100"

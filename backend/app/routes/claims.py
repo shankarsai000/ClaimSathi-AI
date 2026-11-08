@@ -41,11 +41,14 @@ from ..dossier_engine import (
     generate_claim_dossier_and_report,
     submit_to_mock_insurer_gateway,
     render_dossier_pdf_bytes,
+    render_localized_dossier_html,
 )
 from ..providers.transcription import (
     MockTranscriptionProvider,
+    detect_conversation_language,
     extract_claim_fields,
     generate_assistant_dialogue,
+    validate_and_normalize_field_answer,
 )
 
 router = APIRouter(prefix="/claims", tags=["Claims, Dossier & Insurer Gateway"])
@@ -74,24 +77,44 @@ async def extract_text_intake(payload: dict):
     using the real backend NLP extraction engine.
     """
     text = (payload.get("text") or "").strip()
-    language = payload.get("language") or "en-IN"
+    language_hint = payload.get("language") or "indic-auto"
     if not text:
         raise HTTPException(status_code=400, detail="Incident description text is required.")
+    resolved_lang = detect_conversation_language(text, language_hint)
     fields, missing = extract_claim_fields(text)
-    assistant_dialogue, assistant_speech_text, assistant_lang = generate_assistant_dialogue(
+    dialogue_info = generate_assistant_dialogue(
+        transcript=text,
         fields=fields,
         missing_fields=missing,
-        detected_language=language,
+        detected_language=resolved_lang,
     )
     return {
         "transcript": text,
-        "detected_language": language,
+        "detected_language": dialogue_info["language"],
         "fields": [f.model_dump() for f in fields],
         "missing_fields": missing,
-        "assistant_dialogue": assistant_dialogue,
-        "assistant_speech_text": assistant_speech_text,
-        "assistant_language": assistant_lang,
+        "assistant_dialogue": dialogue_info["display_text"],
+        "assistant_speech_text": dialogue_info["speech_text"],
+        "assistant_language": dialogue_info["language"],
     }
+
+
+@router.post("/validate-field-answer")
+async def validate_field_answer_endpoint(payload: dict):
+    """
+    Strictly validate a user's follow-up answer against the expected field type
+    and normalize the value into clean English for insurance company submission.
+    """
+    target_field = (payload.get("target_field") or "").strip()
+    raw_answer = (payload.get("answer") or "").strip()
+    language = payload.get("language") or "en-IN"
+    if not target_field or not raw_answer:
+        raise HTTPException(status_code=400, detail="target_field and answer are required.")
+    return validate_and_normalize_field_answer(
+        target_field=target_field,
+        raw_answer=raw_answer,
+        language=language,
+    )
 
 
 @router.post("/", response_model=ClaimCreateResponse, status_code=201)
@@ -295,6 +318,33 @@ async def download_claim_report_pdf(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{claim_id}/report/localized")
+async def download_claim_report_localized(
+    claim_id: str,
+    lang: str = Query("en", description="Preferred report language: en, kn, te, hi, ta"),
+    download: bool = Query(False, description="Force attachment download if true"),
+    version: Optional[str] = Query(None),
+    user_id: str = Depends(get_optional_current_user_id),
+):
+    """
+    Render or download the 9-Section Claim Dossier in the customer's preferred language
+    (English, Kannada, Telugu, Hindi, Tamil) with full native Unicode font support.
+    """
+    report = await get_latest_claim_report(claim_id, version=version, user_id=user_id)
+    from ..models import ProfessionalClaimDossier
+    dossier_obj = ProfessionalClaimDossier(**report["dossier"])
+    html_str = render_localized_dossier_html(dossier_obj, lang=lang)
+    code = (lang or "en").split("-")[0].lower()
+    headers = {}
+    if download:
+        headers["Content-Disposition"] = f'attachment; filename="ClaimSathi_Dossier_{claim_id}_{code.upper()}.html"'
+    return Response(
+        content=html_str.encode("utf-8"),
+        media_type="text/html; charset=utf-8",
+        headers=headers,
     )
 
 

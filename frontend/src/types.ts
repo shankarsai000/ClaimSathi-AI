@@ -3,11 +3,11 @@
 export type FieldConfidence = 'high' | 'medium' | 'low' | 'missing'
 export type ClaimStatusType =
   | 'draft'
-  | 'evidence_pending'
-  | 'evidence_screened'
   | 'pending_info'
+  | 'evidence_pending'
+  | 'screened'
   | 'confirmed'
-  | 'dossier_generated'
+  | 'report_generated'
   | 'submitted'
   | 'archived'
 
@@ -17,6 +17,7 @@ export interface ClaimField {
   value: string | null
   confidence: FieldConfidence
   is_edited: boolean
+  is_verified?: boolean
   follow_up_question: string | null
 }
 
@@ -72,10 +73,9 @@ export interface TranscriptResponse {
 // ── Phase 1: Customer Account & Vault ──
 
 export interface UserConsentInput {
-  ai_assistance_accepted: boolean
-  media_storage_accepted: boolean
-  fraud_screening_accepted: boolean
-  privacy_policy_accepted: boolean
+  data_processing_consent: boolean
+  evidence_screening_consent: boolean
+  retention_policy_acknowledged: boolean
 }
 
 export interface UserProfile {
@@ -83,24 +83,25 @@ export interface UserProfile {
   name: string
   email: string
   phone: string
-  preferred_language: string
-  created_at: string
+  declared_insurer: string
   consents: UserConsentInput
+  total_claims: number
+  created_at: string
 }
 
 export interface RegisterRequest {
   name: string
   email: string
   phone: string
-  password?: string
-  preferred_language?: string
+  password: string
+  declared_insurer?: string
   consents?: UserConsentInput
 }
 
 export interface LoginRequest {
   identifier: string
   password?: string
-  otp?: string
+  otp_code?: string
   demo_quick_login?: boolean
 }
 
@@ -108,125 +109,99 @@ export interface AuthResponse {
   access_token: string
   token_type: string
   user: UserProfile
-  message: string
 }
 
-// ── Phase 4: Evidence Collection & Integrity Engine ──
+// ── Phase 3 & 4: Evidence Collection & Integrity Engine ──
 
 export type CaptureMethod = 'upload_photo' | 'upload_video' | 'live_photo' | 'guided_video'
-export type ProvenanceStatus =
-  | 'ai_provenance_detected'
-  | 'ai_generated_provenance_detected'
-  | 'integrity_warning'
-  | 'inconclusive'
-  | 'metadata_unavailable'
 export type DuplicateStatus = 'unique' | 'exact_duplicate' | 'visual_duplicate'
-
-export interface CaptureSessionInstruction {
-  step: number
-  code: string
-  prompt: string
-}
 
 export interface CaptureSessionResponse {
   session_id: string
-  claim_id: string
-  capture_type: string
-  instructions: CaptureSessionInstruction[]
+  claim_id: string | null
+  instructions: string[]
   created_at: string
-  expires_at: string
+  expires_in_seconds: number
 }
 
 export interface EvidenceCheckRecord {
   check_id: string
-  asset_id: string
+  evidence_id: string
   claim_id: string
-  magic_bytes_valid: boolean
-  detected_mime: string
   sha256_hash: string
-  phash_hex: string | null
-  provenance_status: ProvenanceStatus
-  provenance_signal: string
-  provenance_summary: string
+  perceptual_hash: string | null
+  magic_bytes_valid: boolean
+  detected_format: string
+  malware_scan_status: string
+  c2pa_found: boolean
+  synthid_found: boolean
+  provenance_result: string
+  provenance_system_response: string
+  provenance_details: Record<string, any>
   duplicate_status: DuplicateStatus
-  matched_claim_id: string | null
-  matched_asset_id: string | null
+  duplicate_match_type: string | null
+  matched_claim_reference: string | null
+  matched_evidence_id: string | null
   hamming_distance: number | null
   requires_human_review: boolean
-  privacy_masked_match: boolean
-  exif_summary: Record<string, any>
   screening_outcome_label: string
   checked_at: string
 }
 
 export interface EvidenceAssetRecord {
-  asset_id: string
+  evidence_id: string
   claim_id: string
-  customer_id: string
+  user_id: string
   label: string
-  original_filename: string
   media_type: string
-  mime_type: string
-  size_bytes: number
-  capture_method: CaptureMethod
+  capture_method: string
   capture_session_id: string | null
+  original_filename: string
+  detected_mime: string
+  file_size_bytes: number
   width: number | null
   height: number | null
-  duration_seconds: number | null
-  storage_path: string
-  created_at: string
-  screening: EvidenceCheckRecord | null
+  exif_metadata: Record<string, any>
+  upload_timestamp: string
+  screening: EvidenceCheckRecord
 }
 
-// ── Phase 6: 9-Section Professional Claim Dossier & Layer 1 Canonical Schema ──
+// ── Phase 5 & 6: 9-Section Professional Claim Dossier & Layer 1 Canonical Schema ──
 
 export interface CanonicalClaimSchema {
   claim_id: string
   customer_id: string
   insurance_type: string
-  policy: {
-    policy_number: string
-    holder_name: string
-  }
-  incident: {
-    date: string
-    time: string
-    location: string
-    description: string
-    vehicle_type: string
-    damage_description: string
-  }
-  evidence: {
-    images: string[]
-    videos: string[]
-    integrity_checks: Record<string, any>[]
-  }
-  validation: {
-    status: string
-    missing_fields: string[]
-    warnings: string[]
-  }
-  customer_confirmation: {
-    confirmed: boolean
-    timestamp: string | null
-  }
+  policy: Record<string, any>
+  incident: Record<string, any>
+  evidence: Record<string, any>
+  validation: Record<string, any>
+  customer_confirmation: boolean
+  report_status: string
+  insurer_submission_status: string
 }
 
 export interface ProfessionalClaimDossier {
-  section_1_claim_header: Record<string, any>
-  section_2_policyholder_profile: Record<string, any>
-  section_3_policy_and_asset_details: Record<string, any>
-  section_4_incident_summary: Record<string, any>
-  section_5_structured_damage_report: Record<string, any>
-  section_6_evidence_inventory_and_screening: Record<string, any>
-  section_7_completeness_and_validation_checklist: Record<string, any>
-  section_8_customer_declaration_and_confirmation: Record<string, any>
-  section_9_audit_and_system_metadata: Record<string, any>
+  claim_id: string
+  report_id: string
+  report_version: string
+  insurance_category: string
+  status_badge: string
+  section_01_customer: Record<string, any>
+  section_02_policy: Record<string, any>
+  section_03_incident: Record<string, any>
+  section_04_statement: Record<string, any>
+  section_05_evidence_inventory: Record<string, any>
+  section_06_validation_review: Record<string, any>
+  section_07_supporting_documents: Record<string, any>
+  section_08_preparation_summary: Record<string, any>
+  section_09_declaration: Record<string, any>
 }
 
 export interface ReportRecord {
   report_id: string
   claim_id: string
+  user_id?: string
   version: string
   dossier: ProfessionalClaimDossier
   canonical_schema: CanonicalClaimSchema
@@ -261,29 +236,23 @@ export interface InsurerSubmissionResponse {
 // ── Claim Records & Vault ──
 
 export interface ClaimCreateRequest {
-  customer_id?: string
-  insurance_type?: string
-  policy_holder_name?: string
   policy_reference: string
   incident_location: string
   incident_date: string
-  incident_time?: string
   vehicle_type: string
-  vehicle_registration?: string
   damage_description: string
-  drivable_status?: string
-  injuries_reported?: string
-  police_fir_info?: string
   transcript: string
-  language?: string
-  conversation_id?: string
-  edited_fields?: string[]
-  customer_confirmed?: boolean
+  customer_id?: string
+  insurer_name?: string
+  policy_type?: string
+  people_involved?: string
+  injuries_reported?: string
+  detailed_statement?: string
 }
 
 export interface ClaimCreateResponse {
   id: string
-  customer_id: string
+  claim_id?: string
   status: ClaimStatusType
   message: string
   is_demo: boolean
@@ -293,24 +262,23 @@ export interface ClaimRecord {
   id: string
   customer_id: string
   insurance_type: string
-  policy_holder_name: string
   policy_reference: string
+  insurer_name: string
+  policy_type: string
   incident_location: string
   incident_date: string
-  incident_time: string
   vehicle_type: string
-  vehicle_registration: string
   damage_description: string
-  drivable_status: string
+  people_involved: string
   injuries_reported: string
-  police_fir_info: string
+  detailed_statement: string
   transcript: string
-  language: string
   status: ClaimStatusType
-  customer_confirmed: boolean
-  confirmed_at: string | null
-  report_version: string
+  customer_confirmation: boolean
+  report_status: string
   insurer_submission_status: string
+  evidence_count_images: number
+  evidence_count_videos: number
   is_demo: boolean
   created_at: string
   updated_at: string
@@ -320,13 +288,12 @@ export interface TimelineEvent {
   timestamp: string
   title: string
   description: string
-  status?: string | null
 }
 
 export interface AuditLogEntry {
   log_id: string
   user_id: string
-  claim_id?: string
+  claim_id?: string | null
   action: string
   details: string
   timestamp: string
@@ -338,7 +305,6 @@ export interface ClaimDetailResponse {
   evidence: EvidenceAssetRecord[]
   reports: ReportRecord[]
   insurer_submissions: InsurerSubmissionResponse[]
-  audit_logs: AuditLogEntry[]
   is_demo: boolean
 }
 
@@ -350,9 +316,10 @@ export interface ClaimListResponse {
 
 export interface VaultSummaryResponse {
   user: UserProfile
-  total_claims: number
+  total_cases: number
   claims: ClaimRecord[]
-  recent_audit_logs: AuditLogEntry[]
+  recent_reports: Record<string, any>[]
+  audit_logs: AuditLogEntry[]
 }
 
 export interface DashboardStats {

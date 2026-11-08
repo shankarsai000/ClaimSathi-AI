@@ -271,89 +271,222 @@ async def init_db():
             )
         """)
 
-        # Seed Rahul's account (USR-100001) & historical claim CS-2026-000085 (Page 8 of PDF)
-        cursor = await db.execute("SELECT customer_id FROM users WHERE customer_id = 'USR-100001'")
-        if not await cursor.fetchone():
-            now_str = datetime.utcnow().isoformat()
-            await db.execute(
-                """INSERT INTO users (customer_id, name, email, phone, password_hash, declared_insurer, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    "USR-100001",
-                    "Rahul Sharma",
-                    "rahul@claimsathi.demo",
-                    "+91-9876543210",
-                    hash_password("rahul123"),
-                    "Bharat General Insurance",
-                    "2026-09-01T10:00:00",
-                ),
-            )
-            await db.execute(
-                """INSERT INTO user_consents
-                   (consent_id, user_id, data_processing_consent, evidence_screening_consent, retention_policy_acknowledged, consented_at)
-                   VALUES (?, ?, 1, 1, 1, ?)""",
-                ("CNS-100001", "USR-100001", "2026-09-01T10:00:05"),
-            )
-            await db.execute(
-                """INSERT INTO audit_logs (log_id, user_id, claim_id, action, details, timestamp)
-                   VALUES (?, ?, NULL, ?, ?, ?)""",
-                (
-                    "AUD-INIT-100001",
-                    "USR-100001",
-                    "ACCOUNT_CREATED",
-                    "Customer account USR-100001 (Rahul Sharma) registered with privacy & screening consent.",
-                    "2026-09-01T10:00:05",
-                ),
-            )
+        # Seed 4 Indian Customer Accounts in database tables (USR-100001 to USR-100004)
+        seed_users = [
+            (
+                "USR-100001",
+                "Rahul Sharma",
+                "rahul.sharma@claimsathi.in",
+                "+91-9876543210",
+                hash_password("Rahul@2026"),
+                "Bharat General Insurance",
+                "2026-09-01T10:00:00",
+            ),
+            (
+                "USR-100002",
+                "Sai Shankar Reddy",
+                "saishankar.reddy@claimsathi.in",
+                "+91-9848022334",
+                hash_password("Shankar@2026"),
+                "Royal Sundaram General Insurance",
+                "2026-09-10T11:15:00",
+            ),
+            (
+                "USR-100003",
+                "Ananya Lakshmi Iyer",
+                "ananya.iyer@claimsathi.in",
+                "+91-9444155667",
+                hash_password("Ananya@2026"),
+                "Chola MS General Insurance",
+                "2026-09-18T14:30:00",
+            ),
+            (
+                "USR-100004",
+                "Vikramaditya Deshmukh",
+                "vikram.deshmukh@claimsathi.in",
+                "+91-9820177889",
+                hash_password("Vikram@2026"),
+                "ICICI Lombard Motor Insurance",
+                "2026-09-25T09:45:00",
+            ),
+        ]
 
-        # Ensure historical claim CS-2026-000085 exists for Rahul's Vault (Page 8 of PDF)
-        c_hist = await db.execute("SELECT id FROM claims WHERE id = 'CS-2026-000085'")
-        if not await c_hist.fetchone():
-            hist_time = "2026-09-14T16:20:00"
-            await db.execute(
-                """INSERT INTO claims
-                   (id, customer_id, insurance_type, policy_reference, insurer_name, policy_type,
-                    incident_location, incident_date, vehicle_type, damage_description,
-                    people_involved, injuries_reported, detailed_statement, transcript,
-                    status, customer_confirmation, report_status, insurer_submission_status,
-                    is_demo, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    "CS-2026-000085",
-                    "USR-100001",
-                    "motor",
-                    "MOT-2026-KA-44210",
-                    "Bharat General Insurance",
-                    "Comprehensive Motor Policy",
-                    "MG Road, Bengaluru",
-                    "2026-09-14",
-                    "car",
-                    "Rear bumper minor dent and tail-lamp crack at traffic signal.",
-                    "Policyholder (Rahul Sharma)",
-                    "No injuries reported",
-                    "On 14 September 2026, while stationary at the MG Road traffic signal in Bengaluru, the insured vehicle (car, Policy MOT-2026-KA-44210) experienced a minor rear-end impact resulting in a rear bumper dent and right tail-lamp crack.",
-                    "Meri car MG Road signal pe ruki thi jab peeche se halka touch hua. Rear bumper aur tail light mein crack aaya hai. Policy MOT-2026-KA-44210.",
-                    ClaimStatus.ARCHIVED.value,
-                    1,
-                    "generated",
-                    "simulated_submitted",
-                    1,
-                    hist_time,
-                    hist_time,
-                ),
-            )
-            await db.execute(
-                """INSERT INTO timeline_events (claim_id, timestamp, title, description)
-                   VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)""",
-                (
-                    "CS-2026-000085", hist_time, "Claim Created [DEMO]",
-                    "Claim dossier CS-2026-000085 initialized in Rahul's Customer Vault.",
-                    "CS-2026-000085", hist_time, "Transcript Processed",
-                    "Voice intake transcribed and structured fields confirmed.",
-                    "CS-2026-000085", hist_time, "Fields Confirmed & Archived",
-                    "Customer confirmed dossier and archived case record.",
-                ),
-            )
+        for cid, uname, uemail, uphone, upw, uinsurer, ucreated in seed_users:
+            cursor = await db.execute("SELECT customer_id FROM users WHERE customer_id = ?", (cid,))
+            if not await cursor.fetchone():
+                await db.execute(
+                    """INSERT INTO users (customer_id, name, email, phone, password_hash, declared_insurer, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (cid, uname, uemail, uphone, upw, uinsurer, ucreated),
+                )
+                cns_id = f"CNS-{cid.replace('USR-', '')}"
+                await db.execute(
+                    """INSERT OR IGNORE INTO user_consents
+                       (consent_id, user_id, data_processing_consent, evidence_screening_consent, retention_policy_acknowledged, consented_at)
+                       VALUES (?, ?, 1, 1, 1, ?)""",
+                    (cns_id, cid, ucreated),
+                )
+                await db.execute(
+                    """INSERT OR IGNORE INTO audit_logs (log_id, user_id, claim_id, action, details, timestamp)
+                       VALUES (?, ?, NULL, ?, ?, ?)""",
+                    (
+                        f"AUD-INIT-{cid.replace('USR-', '')}",
+                        cid,
+                        "ACCOUNT_CREATED",
+                        f"Customer account {cid} ({uname}) registered in database with privacy & screening consent.",
+                        ucreated,
+                    ),
+                )
+            elif cid == "USR-100001":
+                # Ensure Rahul's email and password match the updated credentials
+                await db.execute(
+                    """UPDATE users SET email = ?, phone = ?, password_hash = ?, declared_insurer = ?
+                       WHERE customer_id = 'USR-100001'""",
+                    (uemail, uphone, upw, uinsurer),
+                )
+
+        # Ensure historical claims exist for each of the 4 customer vaults
+        seed_claims = [
+            (
+                "CS-2026-000085",
+                "USR-100001",
+                "motor",
+                "MOT-2026-KA-44210",
+                "Bharat General Insurance",
+                "Comprehensive Motor Policy",
+                "MG Road, Bengaluru",
+                "2026-09-14",
+                "car",
+                "Rear bumper minor dent and tail-lamp crack at traffic signal.",
+                "Policyholder (Rahul Sharma)",
+                "No injuries reported",
+                "On 14 September 2026, while stationary at the MG Road traffic signal in Bengaluru, the insured vehicle (car, Policy MOT-2026-KA-44210) experienced a minor rear-end impact resulting in a rear bumper dent and right tail-lamp crack.",
+                "Meri car MG Road signal pe ruki thi jab peeche se halka touch hua. Rear bumper aur tail light mein crack aaya hai. Policy MOT-2026-KA-44210.",
+                ClaimStatus.ARCHIVED.value,
+                "2026-09-14T16:20:00",
+            ),
+            (
+                "CS-2026-000092",
+                "USR-100002",
+                "motor",
+                "MOT-2024-TS-98765",
+                "Royal Sundaram General Insurance",
+                "Comprehensive Motor Policy",
+                "Madhapur, Hyderabad",
+                "2026-10-04",
+                "car",
+                "Left front door dent and front bumper scratch from side swipe.",
+                "Policyholder (Sai Shankar Reddy)",
+                "No injuries reported",
+                "On 04 October 2026 near Madhapur, Hyderabad, an auto-rickshaw brushed the left side of the insured car (Policy MOT-2024-TS-98765), causing a dent on the left door and front bumper.",
+                "Naa car accident ayyindi Hyderabad Madhapur daggara. Policy MOT-2024-TS-98765. Left door and front bumper damage ayyindi.",
+                ClaimStatus.CONFIRMED.value,
+                "2026-10-04T18:10:00",
+            ),
+            (
+                "CS-2026-000104",
+                "USR-100003",
+                "motor",
+                "MOT-2026-TN-55120",
+                "Chola MS General Insurance",
+                "Two-Wheeler Comprehensive Policy",
+                "Anna Nagar, Chennai",
+                "2026-10-19",
+                "bike",
+                "Front mudguard bent and right indicator broken after skidding on wet road.",
+                "Policyholder (Ananya Lakshmi Iyer)",
+                "No injuries reported",
+                "On 19 October 2026 at Anna Nagar, Chennai, the insured two-wheeler (Policy MOT-2026-TN-55120) skidded during rain, bending the front mudguard and cracking the right indicator.",
+                "En bike Anna Nagar Chennai la rain la skid aagiduchu. Policy MOT-2026-TN-55120. Front mudguard and right indicator damage.",
+                ClaimStatus.CONFIRMED.value,
+                "2026-10-19T12:40:00",
+            ),
+            (
+                "CS-2026-000118",
+                "USR-100004",
+                "motor",
+                "MOT-2026-MH-33901",
+                "ICICI Lombard Motor Insurance",
+                "Zero Depreciation Motor Policy",
+                "Kothrud, Pune",
+                "2026-10-28",
+                "car",
+                "Front grille cracked and right headlamp assembly damaged in parking lot.",
+                "Policyholder (Vikramaditya Deshmukh)",
+                "No injuries reported",
+                "On 28 October 2026 at Kothrud, Pune, a reversing delivery van impacted the front grille and right headlamp of the insured car (Policy MOT-2026-MH-33901).",
+                "Pune Kothrud madhe parking madhe majhya car cha front grille aani right headlight damage zala. Policy MOT-2026-MH-33901.",
+                ClaimStatus.CONFIRMED.value,
+                "2026-10-28T15:05:00",
+            ),
+        ]
+
+        for (
+            cl_id,
+            cl_uid,
+            cl_type,
+            cl_pol,
+            cl_ins,
+            cl_ptype,
+            cl_loc,
+            cl_date,
+            cl_veh,
+            cl_dmg,
+            cl_ppl,
+            cl_inj,
+            cl_stmt,
+            cl_tr,
+            cl_status,
+            cl_time,
+        ) in seed_claims:
+            c_hist = await db.execute("SELECT id FROM claims WHERE id = ?", (cl_id,))
+            if not await c_hist.fetchone():
+                await db.execute(
+                    """INSERT INTO claims
+                       (id, customer_id, insurance_type, policy_reference, insurer_name, policy_type,
+                        incident_location, incident_date, vehicle_type, damage_description,
+                        people_involved, injuries_reported, detailed_statement, transcript,
+                        status, customer_confirmation, report_status, insurer_submission_status,
+                        is_demo, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        cl_id,
+                        cl_uid,
+                        cl_type,
+                        cl_pol,
+                        cl_ins,
+                        cl_ptype,
+                        cl_loc,
+                        cl_date,
+                        cl_veh,
+                        cl_dmg,
+                        cl_ppl,
+                        cl_inj,
+                        cl_stmt,
+                        cl_tr,
+                        cl_status,
+                        1,
+                        "generated",
+                        "simulated_submitted" if cl_status == ClaimStatus.ARCHIVED.value else "not_submitted",
+                        1,
+                        cl_time,
+                        cl_time,
+                    ),
+                )
+                await db.execute(
+                    """INSERT INTO timeline_events (claim_id, timestamp, title, description)
+                       VALUES (?, ?, ?, ?), (?, ?, ?, ?)""",
+                    (
+                        cl_id,
+                        cl_time,
+                        "Claim Created in Customer Vault",
+                        f"Claim dossier {cl_id} initialized for customer {cl_uid}.",
+                        cl_id,
+                        cl_time,
+                        "Multilingual Transcript & Fields Verified",
+                        "Voice/text intake transcribed and structured fields confirmed by policyholder.",
+                    ),
+                )
 
         await db.commit()
 

@@ -699,3 +699,247 @@ async def submit_to_mock_insurer_gateway(
 
     return saved_sub
 
+
+DOSSIER_I18N: Dict[str, Dict[str, str]] = {
+    "en": {
+        "lang_name": "English (Insurer Standard)",
+        "doc_title": "CLAIMSATHI AI — PROFESSIONAL INSURANCE CLAIM DOSSIER",
+        "print_btn": "Print / Save as PDF",
+        "s1": "SECTION 01 — Customer Identification & Profile",
+        "s2": "SECTION 02 — Policy & Coverage Details",
+        "s3": "SECTION 03 — Incident Details & Summary",
+        "s4": "SECTION 04 — Detailed Chronological Incident Statement",
+        "s5": "SECTION 05 — Evidence Inventory & Screening Summary",
+        "s6": "SECTION 06 — Validation & Completeness Review",
+        "s7": "SECTION 07 — Supporting Documents & Cryptographic Hashes",
+        "s8": "SECTION 08 — Claim Preparation Summary & Next Steps",
+        "s9": "SECTION 09 — Customer Confirmation & Regulatory Declaration",
+        "name": "Customer Name",
+        "cid": "Customer ID",
+        "email": "Email / Phone",
+        "insurer": "Insurer",
+        "pol_no": "Policy / Vehicle Number",
+        "pol_type": "Policy Type",
+        "date_loc": "Incident Date & Location",
+        "veh": "Vehicle Type",
+        "damage": "Reported Damage (English for Insurer)",
+        "confirmed": "Customer Confirmed",
+    },
+    "kn": {
+        "lang_name": "ಕನ್ನಡ (Kannada)",
+        "doc_title": "ಕ್ಲೈಮ್‌ಸಾಥಿ AI — ಅಧಿಕೃತ ವಿಮಾ ಕ್ಲೈಮ್ ವರದಿ (CLAIM DOSSIER)",
+        "print_btn": "ಮುದ್ರಿಸಿ / PDF ಆಗಿ ಉಳಿಸಿ (Print / Save PDF)",
+        "s1": "ವಿಭಾಗ 01 — ಗ್ರಾಹಕರ ವಿವರಗಳು (Customer Information)",
+        "s2": "ವಿಭಾಗ 02 — ಪಾಲಿಸಿ ಮತ್ತು ವಾಹನದ ವಿವರಗಳು (Policy & Vehicle Details)",
+        "s3": "ವಿಭಾಗ 03 — ಅಪಘಾತದ ವಿವರಗಳು (Incident Details)",
+        "s4": "ವಿಭಾಗ 04 — ಸಂಪೂರ್ಣ ಘಟನೆಯ ಹೇಳಿಕೆ (Detailed Incident Statement)",
+        "s5": "ವಿಭಾಗ 05 — ಸಾಕ್ಷ್ಯಾಧಾರಗಳ ಪರಿಶೀಲನೆ (Evidence Inventory & Screening)",
+        "s6": "ವಿಭಾಗ 06 — ಪರಿಶೀಲನೆ ಮತ್ತು ಸಮಗ್ರತೆಯ ವರದಿ (Validation & Review)",
+        "s7": "ವಿಭಾಗ 07 — ದಾಖಲೆಗಳು ಮತ್ತು ಕ್ರಿಪ್ಟೋಗ್ರಾಫಿಕ್ ಹ್ಯಾಶ್ (Supporting Documents)",
+        "s8": "ವಿಭಾಗ 08 — ಕ್ಲೈಮ್ ಸಿದ್ಧತಾ ಸಾರಾಂಶ (Claim Preparation Summary)",
+        "s9": "ವಿಭಾಗ 09 — ಗ್ರಾಹಕರ ದೃಢೀಕರಣ ಮತ್ತು ಘೋಷಣೆ (Customer Declaration)",
+        "name": "ಗ್ರಾಹಕರ ಹೆಸರು (Name)",
+        "cid": "ಗ್ರಾಹಕ ಐಡಿ (Customer ID)",
+        "email": "ಇಮೇಲ್ / ಫೋನ್ (Contact)",
+        "insurer": "ವಿಮಾ ಕಂಪನಿ (Insurer)",
+        "pol_no": "ಪಾಲಿಸಿ / ವಾಹನ ಸಂಖ್ಯೆ (Policy / Vehicle No)",
+        "pol_type": "ಪಾಲಿಸಿ ಪ್ರಕಾರ (Policy Type)",
+        "date_loc": "ದಿನಾಂಕ ಮತ್ತು ಸ್ಥಳ (Date & Location)",
+        "veh": "ವಾಹನದ ಪ್ರಕಾರ (Vehicle Type)",
+        "damage": "ವರದಿಯಾದ ಹಾನಿ (Damage in English for Insurer)",
+        "confirmed": "ಗ್ರಾಹಕರಿಂದ ದೃಢೀಕರಿಸಲ್ಪಟ್ಟಿದೆ (Confirmed)",
+    },
+    "te": {
+        "lang_name": "తెలుగు (Telugu)",
+        "doc_title": "క్లెయిమ్‌సాథీ AI — అధికారిక ఇన్సూరెన్స్ క్లెయిమ్ నివేదిక (CLAIM DOSSIER)",
+        "print_btn": "ప్రింట్ / PDF గా సేవ్ చేయండి (Print / Save PDF)",
+        "s1": "విభాగం 01 — కస్టమర్ వివరాలు (Customer Information)",
+        "s2": "విభాగం 02 — పాలసీ & వాహన వివరాలు (Policy & Vehicle Details)",
+        "s3": "విభాగం 03 — ప్రమాద వివరాలు (Incident Details)",
+        "s4": "విభాగం 04 — పూర్తి సంఘటన వివరణ (Detailed Incident Statement)",
+        "s5": "విభాగం 05 — సాక్ష్యాల పరిశీలన జాబితా (Evidence Inventory & Screening)",
+        "s6": "విభాగం 06 — ధృవీకరణ & సమీక్ష (Validation & Review)",
+        "s7": "విభాగం 07 — అనుబంధ పత్రాలు & క్రిప్టోగ్రాఫిక్ హ్యాష్ (Supporting Documents)",
+        "s8": "విభాగం 08 — క్లెయిమ్ సారాంశం & తదుపరి చర్యలు (Preparation Summary)",
+        "s9": "విభాగం 09 — కస్టమర్ నిర్ధారణ & డిక్లరేషన్ (Customer Declaration)",
+        "name": "కస్టమర్ పేరు (Name)",
+        "cid": "కస్టమర్ ఐడి (Customer ID)",
+        "email": "ఇమెయిల్ / ఫోన్ (Contact)",
+        "insurer": "ఇన్సూరెన్స్ కంపెనీ (Insurer)",
+        "pol_no": "పాలసీ / వాహన నంబర్ (Policy / Vehicle No)",
+        "pol_type": "పాలసీ రకం (Policy Type)",
+        "date_loc": "తేదీ మరియు ప్రదేశం (Date & Location)",
+        "veh": "వాహనం రకం (Vehicle Type)",
+        "damage": "వాహన డ్యామేజ్ వివరాలు (Damage in English for Insurer)",
+        "confirmed": "కస్టమర్ నిర్ధారించారు (Confirmed)",
+    },
+    "hi": {
+        "lang_name": "हिन्दी (Hindi)",
+        "doc_title": "क्लेमसाथी AI — आधिकारिक बीमा क्लेम रिपोर्ट (CLAIM DOSSIER)",
+        "print_btn": "प्रिंट करें / PDF के रूप में सहेजें (Print / Save PDF)",
+        "s1": "अनुभाग 01 — ग्राहक पहचान और प्रोफ़ाइल (Customer Information)",
+        "s2": "अनुभाग 02 — पॉलिसी और वाहन विवरण (Policy & Vehicle Details)",
+        "s3": "अनुभाग 03 — दुर्घटना का विवरण (Incident Details)",
+        "s4": "अनुभाग 04 — विस्तृत घटना विवरण (Detailed Incident Statement)",
+        "s5": "अनुभाग 05 — साक्ष्य सूची और जांच सारांश (Evidence Screening)",
+        "s6": "अनुभाग 06 — सत्यापन और समीक्षा (Validation & Review)",
+        "s7": "अनुभाग 07 — सहायक दस्तावेज़ और क्रिप्टोग्राफ़िक हैश (Supporting Documents)",
+        "s8": "अनुभाग 08 — क्लेम तैयारी सारांश (Claim Preparation Summary)",
+        "s9": "अनुभाग 09 — ग्राहक पुष्टि और घोषणा (Customer Declaration)",
+        "name": "ग्राहक का नाम (Name)",
+        "cid": "ग्राहक आईडी (Customer ID)",
+        "email": "ईमेल / फ़ोन (Contact)",
+        "insurer": "बीमा कंपनी (Insurer)",
+        "pol_no": "पॉलिसी / वाहन नंबर (Policy / Vehicle No)",
+        "pol_type": "पॉलिसी प्रकार (Policy Type)",
+        "date_loc": "तारीख और स्थान (Date & Location)",
+        "veh": "वाहन का प्रकार (Vehicle Type)",
+        "damage": "क्षति का विवरण (Damage in English for Insurer)",
+        "confirmed": "ग्राहक द्वारा सत्यापित (Confirmed)",
+    },
+    "ta": {
+        "lang_name": "தமிழ் (Tamil)",
+        "doc_title": "கிளைம்சாத்தி AI — அதிகாரப்பூர்வ காப்பீட்டு கோரிக்கை அறிக்கை (CLAIM DOSSIER)",
+        "print_btn": "அச்சிடு / PDF ஆக சேமி (Print / Save PDF)",
+        "s1": "பிரிவு 01 — வாடிக்கையாளர் விவரங்கள் (Customer Information)",
+        "s2": "பிரிவு 02 — பாலிசி & வாகன விவரங்கள் (Policy & Vehicle Details)",
+        "s3": "பிரிவு 03 — விபத்து விவரங்கள் (Incident Details)",
+        "s4": "பிரிவு 04 — விரிவான சம்பவ அறிக்கை (Detailed Incident Statement)",
+        "s5": "பிரிவு 05 — ஆதாரங்கள் மற்றும் சரிபார்ப்பு (Evidence Screening)",
+        "s6": "பிரிவு 06 — சரிபார்ப்பு மற்றும் ஆய்வு (Validation & Review)",
+        "s7": "பிரிவு 07 — துணை ஆவணங்கள் (Supporting Documents)",
+        "s8": "பிரிவு 08 — கோரிக்கை சுருக்கம் (Claim Preparation Summary)",
+        "s9": "பிரிவு 09 — வாடிக்கையாளர் உறுதிமொழி (Customer Declaration)",
+        "name": "வாடிக்கையாளர் பெயர் (Name)",
+        "cid": "வாடிக்கையாளர் எண் (Customer ID)",
+        "email": "மின்னஞ்சல் / தொலைபேசி (Contact)",
+        "insurer": "காப்பீட்டு நிறுவனம் (Insurer)",
+        "pol_no": "பாலிசி / வாகன எண் (Policy / Vehicle No)",
+        "pol_type": "பாலிசி வகை (Policy Type)",
+        "date_loc": "தேதி மற்றும் இடம் (Date & Location)",
+        "veh": "வாகன வகை (Vehicle Type)",
+        "damage": "சேத விவரம் (Damage in English for Insurer)",
+        "confirmed": "உறுதி செய்யப்பட்டது (Confirmed)",
+    },
+}
+
+
+def render_localized_dossier_html(dossier: ProfessionalClaimDossier, lang: str = "en") -> str:
+    """
+    Render a printable, downloadable Unicode HTML dossier in the customer's preferred language
+    (English, Kannada, Telugu, Hindi, or Tamil), keeping core structured values in English for insurers.
+    """
+    code = (lang or "en").split("-")[0].lower()
+    tr = DOSSIER_I18N.get(code, DOSSIER_I18N["en"])
+
+    s1 = dossier.section_01_customer
+    s2 = dossier.section_02_policy
+    s3 = dossier.section_03_incident
+    s4 = dossier.section_04_statement
+    s5 = dossier.section_05_evidence_inventory
+    s6 = dossier.section_06_validation_review
+    s7 = dossier.section_07_supporting_documents
+    s8 = dossier.section_08_preparation_summary
+    s9 = dossier.section_09_declaration
+
+    ev_rows = "".join(
+        f"<tr><td><b>{item.evidence_id}</b> ({item.item_label})</td><td>{item.capture_method}</td><td>{item.screening_outcome}</td></tr>"
+        for item in s5.items
+    ) or "<tr><td colspan='3'>No evidence uploaded yet.</td></tr>"
+
+    doc_rows = "".join(
+        f"<tr><td><b>{d.evidence_id}</b> — {d.filename}</td><td><code>{d.sha256_hash[:24]}...</code></td><td><code>{d.perceptual_hash or 'N/A'}</code></td></tr>"
+        for d in s7.documents
+    ) or "<tr><td colspan='3'>No supporting files attached.</td></tr>"
+
+    return f"""<!DOCTYPE html>
+<html lang="{code}">
+<head>
+<meta charset="utf-8" />
+<title>{tr['doc_title']} - {dossier.claim_id}</title>
+<style>
+  body {{ font-family: 'Segoe UI', 'Nirmala UI', 'Gautami', 'Tunga', 'Mangal', sans-serif; margin: 32px; color: #111827; background: #f9fafb; }}
+  .container {{ max-width: 900px; margin: 0 auto; background: #ffffff; border: 1px solid #e5e7eb; border-radius: 16px; padding: 32px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }}
+  .top-bar {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #1d4ed8; padding-bottom: 16px; margin-bottom: 24px; }}
+  h1 {{ font-size: 20px; color: #1e3a8a; margin: 0 0 6px 0; }}
+  h2 {{ font-size: 14px; color: #1d4ed8; background: #eff6ff; padding: 8px 12px; border-radius: 8px; margin-top: 20px; margin-bottom: 10px; border-left: 4px solid #2563eb; }}
+  .meta {{ font-size: 12px; color: #4b5563; }}
+  .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px 20px; font-size: 13px; }}
+  .field-box {{ background: #f8fafc; border: 1px solid #e2e8f0; padding: 10px 12px; border-radius: 8px; }}
+  .label {{ font-size: 11px; color: #64748b; font-weight: 600; display: block; margin-bottom: 2px; }}
+  .val {{ font-size: 13px; color: #0f172a; font-weight: 700; }}
+  p {{ font-size: 13px; line-height: 1.6; margin: 6px 0; }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }}
+  th, td {{ border: 1px solid #cbd5e1; padding: 8px 10px; text-align: left; }}
+  th {{ background: #f1f5f9; color: #334155; }}
+  .btn {{ background: #2563eb; color: #fff; border: none; padding: 10px 18px; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 13px; }}
+  @media print {{ .no-print {{ display: none !important; }} body {{ margin: 0; background: #fff; }} .container {{ border: none; box-shadow: none; padding: 0; }} }}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="top-bar">
+    <div>
+      <h1>{tr['doc_title']}</h1>
+      <div class="meta">Claim ID: <b>{dossier.claim_id}</b> &bull; Report ID: <b>{dossier.report_id} (v{dossier.report_version})</b> &bull; Language: <b>{tr['lang_name']}</b></div>
+    </div>
+    <button class="btn no-print" onclick="window.print()">{tr['print_btn']}</button>
+  </div>
+
+  <h2>{tr['s1']}</h2>
+  <div class="grid">
+    <div class="field-box"><span class="label">{tr['name']}</span><span class="val">{s1.name}</span></div>
+    <div class="field-box"><span class="label">{tr['cid']}</span><span class="val">{s1.customer_id}</span></div>
+    <div class="field-box"><span class="label">{tr['email']}</span><span class="val">{s1.email} / {s1.phone}</span></div>
+    <div class="field-box"><span class="label">{tr['insurer']}</span><span class="val">{s1.declared_insurer}</span></div>
+  </div>
+
+  <h2>{tr['s2']}</h2>
+  <div class="grid">
+    <div class="field-box"><span class="label">{tr['pol_no']}</span><span class="val">{s2.policy_number}</span></div>
+    <div class="field-box"><span class="label">{tr['pol_type']}</span><span class="val">{s2.policy_type} ({s2.verification_status})</span></div>
+  </div>
+
+  <h2>{tr['s3']}</h2>
+  <div class="grid">
+    <div class="field-box"><span class="label">{tr['date_loc']}</span><span class="val">{s3.incident_date_time} — {s3.incident_location}</span></div>
+    <div class="field-box"><span class="label">{tr['veh']}</span><span class="val">{s3.vehicle_details}</span></div>
+    <div class="field-box" style="grid-column: span 2;"><span class="label">{tr['damage']}</span><span class="val">{s3.injuries_or_damage}</span></div>
+  </div>
+
+  <h2>{tr['s4']}</h2>
+  <div class="field-box"><p>{s4.chronological_account}</p></div>
+
+  <h2>{tr['s5']}</h2>
+  <table>
+    <thead><tr><th>Evidence ID</th><th>Capture Method</th><th>Integrity Screening Outcome</th></tr></thead>
+    <tbody>{ev_rows}</tbody>
+  </table>
+
+  <h2>{tr['s6']}</h2>
+  <div class="field-box">
+    <p><b>Missing Fields:</b> {', '.join(s6.missing_information) if s6.missing_information else 'None (All 5 Core Fields Captured in English)'}</p>
+    <p><b>Warnings:</b> {', '.join(s6.evidence_warnings) if s6.evidence_warnings else 'None'}</p>
+  </div>
+
+  <h2>{tr['s7']}</h2>
+  <table>
+    <thead><tr><th>Document</th><th>SHA-256 Fingerprint</th><th>64-bit DCT pHash</th></tr></thead>
+    <tbody>{doc_rows}</tbody>
+  </table>
+
+  <h2>{tr['s8']}</h2>
+  <div class="field-box">
+    <p>{s8.incident_summary}</p>
+    <p><b>Evidence Summary:</b> {s8.available_evidence_summary}</p>
+  </div>
+
+  <h2>{tr['s9']}</h2>
+  <div class="field-box">
+    <p><b>{tr['confirmed']}:</b> {'YES' if s9.customer_confirmed else 'NO'} — {s9.confirmed_by_name} ({s9.confirmed_by_id}) at {s9.report_generation_timestamp}</p>
+    <p style="font-size:11px;color:#64748b;">{s9.declaration_text}</p>
+  </div>
+</div>
+</body>
+</html>"""
+

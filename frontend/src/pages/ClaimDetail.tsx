@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { api } from '../api'
+import { APP_LANGUAGES, useAppSettings, type AppLanguageCode } from '../i18n'
 import type {
   ClaimRecord,
   TimelineEvent,
   EvidenceAssetRecord,
   ReportRecord,
   InsurerSubmissionResponse,
-  AuditLogEntry,
 } from '../types'
 import Spinner from '../components/Spinner'
 import StatusBadge from '../components/StatusBadge'
@@ -22,7 +22,6 @@ import {
   VolumeX,
   Download,
   FileCode,
-  ShieldCheck,
   Building2,
   Fingerprint,
   RefreshCw,
@@ -33,25 +32,25 @@ import {
 } from 'lucide-react'
 
 const SECTION_TITLES: { key: string; num: string; title: string }[] = [
-  { key: 'section_1_claim_header', num: '01', title: 'Claim Header' },
-  { key: 'section_2_policyholder_profile', num: '02', title: 'Policyholder Profile' },
-  { key: 'section_3_policy_and_asset_details', num: '03', title: 'Policy and Asset Details' },
-  { key: 'section_4_incident_summary', num: '04', title: 'Incident Summary' },
-  { key: 'section_5_structured_damage_report', num: '05', title: 'Structured Damage Report' },
-  { key: 'section_6_evidence_inventory_and_screening', num: '06', title: 'Evidence Inventory & Screening Summary' },
-  { key: 'section_7_completeness_and_validation_checklist', num: '07', title: 'Completeness & Validation Checklist' },
-  { key: 'section_8_customer_declaration_and_confirmation', num: '08', title: 'Customer Declaration & Confirmation' },
-  { key: 'section_9_audit_and_system_metadata', num: '09', title: 'Audit & System Metadata' },
+  { key: 'section_01_customer', num: '01', title: 'Customer Identification & Profile' },
+  { key: 'section_02_policy', num: '02', title: 'Policy & Coverage Details' },
+  { key: 'section_03_incident', num: '03', title: 'Incident Details & Summary' },
+  { key: 'section_04_statement', num: '04', title: 'Detailed Chronological Incident Statement' },
+  { key: 'section_05_evidence_inventory', num: '05', title: 'Evidence Inventory & Screening Summary' },
+  { key: 'section_06_validation_review', num: '06', title: 'Validation & Completeness Review' },
+  { key: 'section_07_supporting_documents', num: '07', title: 'Supporting Documents & Cryptographic Hashes' },
+  { key: 'section_08_preparation_summary', num: '08', title: 'Claim Preparation Summary & Next Steps' },
+  { key: 'section_09_declaration', num: '09', title: 'Customer Confirmation & Regulatory Declaration' },
 ]
 
 export default function ClaimDetail() {
   const { id } = useParams<{ id: string }>()
+  const { preferredReportLanguage, setPreferredReportLanguage, t } = useAppSettings()
   const [claim, setClaim] = useState<ClaimRecord | null>(null)
   const [timeline, setTimeline] = useState<TimelineEvent[]>([])
   const [evidence, setEvidence] = useState<EvidenceAssetRecord[]>([])
   const [reports, setReports] = useState<ReportRecord[]>([])
   const [submissions, setSubmissions] = useState<InsurerSubmissionResponse[]>([])
-  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([])
 
   const [activeTab, setActiveTab] = useState<'dossier' | 'evidence' | 'gateway' | 'timeline'>('dossier')
   const [loading, setLoading] = useState(true)
@@ -74,9 +73,7 @@ export default function ClaimDetail() {
       setEvidence(data.evidence || [])
       setReports(data.reports || [])
       setSubmissions(data.insurer_submissions || [])
-      setAuditLogs(data.audit_logs || [])
 
-      // Auto-generate v1.0 dossier if none exists yet
       if (!data.reports || data.reports.length === 0) {
         const rep = await api.generateReport(id)
         setReports([rep])
@@ -203,32 +200,57 @@ export default function ClaimDetail() {
             to="/dashboard"
             className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 mb-2 hover:underline"
           >
-            <ArrowLeft className="w-3.5 h-3.5" /> Back to Customer Claims Vault ({claim.customer_id})
+            <ArrowLeft className="w-3.5 h-3.5" /> {t('claim_detail_back')} ({claim.customer_id})
           </Link>
           <div className="flex flex-wrap items-center gap-2.5">
             <h1 className="text-2xl font-extrabold text-gray-900 font-mono">{claim.id}</h1>
             <StatusBadge status={claim.status} />
             <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-purple-50 text-purple-800 border border-purple-200">
-              Dossier v{latestReport?.version || claim.report_version || '1.0'}
+              Dossier v{latestReport?.version || '1.0'}
             </span>
             <DemoBadge />
           </div>
           <p className="text-xs text-gray-500 mt-1">
-            Policy: <strong className="text-gray-800">{claim.policy_reference}</strong> &bull; Customer:{' '}
-            <strong className="text-gray-800">{claim.policy_holder_name} ({claim.customer_id})</strong> &bull; Vehicle:{' '}
+            Policy: <strong className="text-gray-800">{claim.policy_reference}</strong> &bull; Insurer:{' '}
+            <strong className="text-gray-800">{claim.insurer_name}</strong> &bull; Vehicle:{' '}
             <strong className="text-gray-800 capitalize">{claim.vehicle_type}</strong>
           </p>
         </div>
 
-        {/* Download & Gateway Action Buttons */}
+        {/* Download & Gateway Action Buttons (Multi-Language + English Insurer PDF) */}
         <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex items-center gap-1.5 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2">
+            <span className="text-xs font-bold text-blue-900">{t('report_lang_label')}</span>
+            <select
+              value={preferredReportLanguage}
+              onChange={(e) => setPreferredReportLanguage(e.target.value as AppLanguageCode)}
+              className="bg-transparent text-xs font-extrabold text-blue-800 focus:outline-none cursor-pointer"
+            >
+              {APP_LANGUAGES.map((l) => (
+                <option key={l.code} value={l.code}>
+                  {l.native} ({l.label})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <a
+            href={api.getReportLocalizedUrl(claim.id, preferredReportLanguage, false)}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 shadow-xs"
+          >
+            <Download className="w-4 h-4" />
+            {t('download_preferred_lang_btn')} ({APP_LANGUAGES.find((l) => l.code === preferredReportLanguage)?.native})
+          </a>
+
           <a
             href={api.getReportPdfUrl(claim.id)}
             target="_blank"
             rel="noreferrer"
             className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-brand-600 text-white text-xs font-bold hover:bg-brand-700 shadow-xs"
           >
-            <Download className="w-4 h-4" /> Download Binary PDF Dossier
+            <Download className="w-4 h-4" /> {t('download_english_pdf_btn')}
           </a>
           <a
             href={api.getReportJsonUrl(claim.id)}
@@ -236,7 +258,7 @@ export default function ClaimDetail() {
             rel="noreferrer"
             className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-white border border-gray-300 text-gray-800 text-xs font-semibold hover:bg-gray-50"
           >
-            <FileCode className="w-4 h-4 text-blue-600" /> Layer 1 Canonical JSON
+            <FileCode className="w-4 h-4 text-blue-600" /> {t('download_json_btn')}
           </a>
           <button
             type="button"
@@ -277,7 +299,7 @@ export default function ClaimDetail() {
           },
           {
             id: 'timeline',
-            label: 'Transcript, Timeline & Audit Trail',
+            label: 'Transcript & Activity Timeline',
             icon: Clock,
           },
         ].map(({ id: tabId, label, icon: Icon }) => (
@@ -339,7 +361,9 @@ export default function ClaimDetail() {
                 <div
                   key={key}
                   className={`bg-white rounded-2xl border border-gray-200 p-5 shadow-xs ${
-                    key === 'section_6_evidence_inventory_and_screening' ? 'md:col-span-2' : ''
+                    key === 'section_05_evidence_inventory' || key === 'section_07_supporting_documents'
+                      ? 'md:col-span-2'
+                      : ''
                   }`}
                 >
                   <div className="flex items-center gap-2.5 border-b border-gray-100 pb-3 mb-3">
@@ -430,14 +454,14 @@ export default function ClaimDetail() {
                 const isFlagged = scr?.requires_human_review
                 return (
                   <div
-                    key={ev.asset_id}
+                    key={ev.evidence_id}
                     className={`rounded-2xl border p-4 flex gap-4 ${
                       isFlagged ? 'bg-amber-50/60 border-amber-300' : 'bg-gray-50/60 border-gray-200'
                     }`}
                   >
                     {ev.media_type === 'image' ? (
                       <img
-                        src={api.getEvidenceFileUrl(ev.asset_id)}
+                        src={api.getEvidenceFileUrl(claim.id, ev.evidence_id)}
                         alt={ev.label}
                         className="w-28 h-28 rounded-xl object-cover border border-gray-200 shrink-0 bg-white"
                       />
@@ -476,13 +500,15 @@ export default function ClaimDetail() {
                           <div className="font-semibold text-gray-800">
                             {scr.screening_outcome_label}
                           </div>
-                          <div className="text-[11px] text-gray-600">{scr.provenance_summary}</div>
+                          <div className="text-[11px] text-gray-600">
+                            {scr.provenance_result} &rarr; <strong>{scr.provenance_system_response}</strong>
+                          </div>
                           <div className="text-[10px] font-mono text-gray-500 bg-white p-2 rounded-lg border border-gray-200 space-y-0.5">
                             <div className="truncate">SHA-256: {scr.sha256_hash}</div>
-                            {scr.phash_hex && <div>64-bit pHash: {scr.phash_hex}</div>}
+                            {scr.perceptual_hash && <div>64-bit pHash: {scr.perceptual_hash}</div>}
                             <div>
                               Duplicate Status: <strong>{scr.duplicate_status}</strong>
-                              {scr.matched_claim_id && ` (Matched ${scr.matched_claim_id})`}
+                              {scr.matched_claim_reference && ` (Matched ${scr.matched_claim_reference})`}
                             </div>
                           </div>
                         </div>
@@ -606,7 +632,7 @@ export default function ClaimDetail() {
       )}
 
       {/* =====================================================================
-          TAB 4: TRANSCRIPT, TIMELINE & AUDIT TRAIL
+          TAB 4: TRANSCRIPT & ACTIVITY TIMELINE
          ===================================================================== */}
       {activeTab === 'timeline' && (
         <div className="space-y-6">
@@ -614,7 +640,7 @@ export default function ClaimDetail() {
             <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-xs">
               <div className="flex items-center justify-between mb-2">
                 <h2 className="text-xs font-bold text-gray-600 uppercase tracking-wider">
-                  Recorded Customer Transcript ({claim.language})
+                  Recorded Customer Transcript
                 </h2>
                 <button
                   type="button"
@@ -643,50 +669,22 @@ export default function ClaimDetail() {
             </div>
           )}
 
-          <div className="grid md:grid-cols-2 gap-6">
-            {/* Activity Timeline */}
-            <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-xs">
-              <h2 className="font-bold text-gray-900 text-sm mb-4 flex items-center gap-2">
-                <Clock className="w-4 h-4 text-blue-600" /> Claim Lifecycle Timeline
-              </h2>
-              <ol className="relative border-l-2 border-gray-200 ml-3 space-y-5">
-                {timeline.map((evt, i) => (
-                  <li key={i} className="ml-5">
-                    <span className="absolute -left-[9px] w-4 h-4 rounded-full bg-blue-600 border-2 border-white" />
-                    <time className="text-[11px] text-gray-400">
-                      {new Date(evt.timestamp).toLocaleString()}
-                    </time>
-                    <h3 className="text-xs font-bold text-gray-900">{evt.title}</h3>
-                    <p className="text-xs text-gray-600">{evt.description}</p>
-                  </li>
-                ))}
-              </ol>
-            </div>
-
-            {/* Security & Provenance Audit Trail */}
-            <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-xs">
-              <h2 className="font-bold text-gray-900 text-sm mb-4 flex items-center gap-2">
-                <ShieldCheck className="w-4 h-4 text-emerald-600" /> Security &amp; Audit Logs
-              </h2>
-              <div className="space-y-2.5">
-                {auditLogs.map((log) => (
-                  <div
-                    key={log.log_id}
-                    className="bg-gray-50 rounded-xl p-3 border border-gray-100 text-xs"
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-mono font-bold text-[10px] px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
-                        {log.action}
-                      </span>
-                      <span className="text-[10px] text-gray-400">
-                        {new Date(log.timestamp).toLocaleString()}
-                      </span>
-                    </div>
-                    <p className="text-gray-700">{log.details}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
+          <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-xs">
+            <h2 className="font-bold text-gray-900 text-sm mb-4 flex items-center gap-2">
+              <Clock className="w-4 h-4 text-blue-600" /> Claim Lifecycle Timeline
+            </h2>
+            <ol className="relative border-l-2 border-gray-200 ml-3 space-y-5">
+              {timeline.map((evt, i) => (
+                <li key={i} className="ml-5">
+                  <span className="absolute -left-[9px] w-4 h-4 rounded-full bg-blue-600 border-2 border-white" />
+                  <time className="text-[11px] text-gray-400">
+                    {new Date(evt.timestamp).toLocaleString()}
+                  </time>
+                  <h3 className="text-xs font-bold text-gray-900">{evt.title}</h3>
+                  <p className="text-xs text-gray-600">{evt.description}</p>
+                </li>
+              ))}
+            </ol>
           </div>
         </div>
       )}

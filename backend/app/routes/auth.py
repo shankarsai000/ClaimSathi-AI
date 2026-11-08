@@ -8,13 +8,15 @@ Provides:
 - GET  /api/auth/vault
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Query
 from ..models import (
     RegisterRequest,
     LoginRequest,
     OTPRequest,
     AuthResponse,
     UserProfile,
+    UserConsentInput,
     VaultSummaryResponse,
 )
 from ..auth import (
@@ -76,10 +78,10 @@ async def request_login_otp(request: OTPRequest):
 async def login_customer(request: LoginRequest):
     """
     Authenticate customer by Email, Phone, or Customer ID (e.g. USR-100001).
-    Supports Password login, OTP verification, and Quick Demo Login for Rahul (USR-100001).
+    Supports Password login, OTP verification, and Quick Demo Login.
     """
     if request.demo_quick_login:
-        user_row = await get_user_by_identifier("USR-100001")
+        user_row = await get_user_by_identifier(request.identifier) or await get_user_by_identifier("USR-100001")
     else:
         user_row = await get_user_by_identifier(request.identifier)
 
@@ -120,17 +122,21 @@ async def get_current_customer_profile(user_id: str = Depends(get_optional_curre
 
 
 @router.get("/vault", response_model=VaultSummaryResponse)
-async def get_customer_claims_vault(user_id: str = Depends(get_optional_current_user_id)):
+async def get_customer_claims_vault(
+    customer_id: Optional[str] = Query(None),
+    user_id: str = Depends(get_optional_current_user_id),
+):
     """
     Customer Claims Vault (Phase 6 — Page 8 of PDF).
     Returns customer profile, all lifetime cases, generated dossier reports, and audit trail.
     """
-    profile = await get_user_profile(user_id)
+    target_uid = customer_id or user_id
+    profile = await get_user_profile(target_uid)
     if not profile:
         profile = await get_user_profile("USR-100001")
-        user_id = "USR-100001"
+        target_uid = "USR-100001"
 
-    claims = await get_all_claims(customer_id=user_id)
+    claims = await get_all_claims(customer_id=target_uid)
     recent_reports = []
     for c in claims:
         rpts = await get_claim_reports(c.id)
@@ -144,7 +150,7 @@ async def get_customer_claims_vault(user_id: str = Depends(get_optional_current_
                 "json_download_url": r["json_download_url"],
             })
 
-    audit_logs = await get_user_audit_logs(user_id, limit=25)
+    audit_logs = await get_user_audit_logs(target_uid, limit=25)
     return VaultSummaryResponse(
         user=profile,
         total_cases=len(claims),

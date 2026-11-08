@@ -12,11 +12,11 @@ import type {
   AuthResponse,
   UserProfile,
   VaultSummaryResponse,
-  UserConsentInput,
   CaptureSessionResponse,
   EvidenceAssetRecord,
   ReportRecord,
   InsurerSubmissionResponse,
+  ClaimRecord,
 } from './types'
 
 const BASE = '/api'
@@ -72,7 +72,7 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<HealthResponse>('/health'),
 
-  // ── Phase 1: Customer Registration, Login & Vault ──
+  // ── Phase 1: Customer Registration, Login, OTP & Vault ──
   register: async (data: RegisterRequest): Promise<AuthResponse> => {
     const res = await request<AuthResponse>('/auth/register', {
       method: 'POST',
@@ -81,6 +81,15 @@ export const api = {
     setStoredAuth(res.access_token, res.user)
     return res
   },
+
+  requestOtp: (identifier: string) =>
+    request<{ identifier: string; otp_sent: boolean; demo_otp_code: string; message: string }>(
+      '/auth/request-otp',
+      {
+        method: 'POST',
+        body: JSON.stringify({ identifier }),
+      },
+    ),
 
   login: async (data: LoginRequest): Promise<AuthResponse> => {
     const res = await request<AuthResponse>('/auth/login', {
@@ -97,12 +106,6 @@ export const api = {
     request<VaultSummaryResponse>(
       customerId ? `/auth/vault?customer_id=${encodeURIComponent(customerId)}` : '/auth/vault',
     ),
-
-  updateConsent: (consents: UserConsentInput) =>
-    request<{ status: string; customer_id: string; consents: UserConsentInput }>('/auth/consent', {
-      method: 'POST',
-      body: JSON.stringify(consents),
-    }),
 
   // ── Phase 2 & 3: Live Gnani Prisma STT & Timbre TTS ──
   transcribeVoice: async (
@@ -173,7 +176,19 @@ export const api = {
       body: JSON.stringify({ text, language }),
     }),
 
-  // ── Phase 4: Evidence Collection & Integrity Engine ──
+  validateFieldAnswer: (targetField: string, answer: string, language = 'en-IN') =>
+    request<{
+      is_valid_for_target: boolean
+      english_value: string | null
+      routed_fields: Record<string, string>
+      error_prompt: string | null
+      detected_language: string
+    }>('/claims/validate-field-answer', {
+      method: 'POST',
+      body: JSON.stringify({ target_field: targetField, answer, language }),
+    }),
+
+  // ── Phase 3 & 4: Evidence Collection & Integrity Engine ──
   startCaptureSession: (claimId: string, captureType = 'guided_video_and_photo') =>
     request<CaptureSessionResponse>('/evidence/capture-session', {
       method: 'POST',
@@ -213,11 +228,10 @@ export const api = {
   },
 
   listClaimEvidence: (claimId: string) =>
-    request<{ claim_id: string; total: number; assets: EvidenceAssetRecord[] }>(
-      `/evidence/${encodeURIComponent(claimId)}`,
-    ),
+    request<EvidenceAssetRecord[]>(`/evidence/${encodeURIComponent(claimId)}`),
 
-  getEvidenceFileUrl: (assetId: string) => `${BASE}/evidence/file/${encodeURIComponent(assetId)}`,
+  getEvidenceFileUrl: (claimId: string, evidenceId: string) =>
+    `${BASE}/evidence/${encodeURIComponent(claimId)}/file/${encodeURIComponent(evidenceId)}`,
 
   // ── Phase 5, 6 & 7: Claims, Confirmation, 9-Section Dossier, PDF & Mock Insurer Gateway ──
   createClaim: (data: ClaimCreateRequest) =>
@@ -226,21 +240,10 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
-  confirmClaim: (
-    claimId: string,
-    data: {
-      confirmed?: boolean
-      edited_fields?: Record<string, string>
-      drivable_status?: string
-      injuries_reported?: string
-      police_fir_info?: string
-      vehicle_registration?: string
-      incident_time?: string
-    },
-  ) =>
-    request<{ status: string; claim: any }>(`/claims/${encodeURIComponent(claimId)}/confirm`, {
-      method: 'POST',
-      body: JSON.stringify({ confirmed: true, ...data }),
+  updateAndConfirmClaim: (claimId: string, updates: Record<string, any>) =>
+    request<ClaimRecord>(`/claims/${encodeURIComponent(claimId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
     }),
 
   generateReport: (claimId: string) =>
@@ -254,6 +257,9 @@ export const api = {
   getReportPdfUrl: (claimId: string, version?: string) =>
     `${BASE}/claims/${encodeURIComponent(claimId)}/report/pdf${version ? `?version=${encodeURIComponent(version)}` : ''}`,
 
+  getReportLocalizedUrl: (claimId: string, lang: string = 'en', download: boolean = false) =>
+    `${BASE}/claims/${encodeURIComponent(claimId)}/report/localized?lang=${encodeURIComponent(lang)}${download ? '&download=true' : ''}`,
+
   getReportJsonUrl: (claimId: string, version?: string) =>
     `${BASE}/claims/${encodeURIComponent(claimId)}/report/json${version ? `?version=${encodeURIComponent(version)}` : ''}`,
 
@@ -263,8 +269,7 @@ export const api = {
       body: JSON.stringify({
         recipient,
         submission_channel: 'Official insurer API',
-        include_canonical_json: true,
-        include_pdf_dossier: true,
+        customer_authorized: true,
       }),
     }),
 

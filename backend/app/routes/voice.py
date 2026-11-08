@@ -12,6 +12,7 @@ from ..providers.speech import GnaniTimbreProvider, MockSpeechProvider
 from ..providers.transcription import (
     GnaniPrismaProvider,
     MockTranscriptionProvider,
+    detect_conversation_language,
     extract_claim_fields,
     generate_assistant_dialogue,
 )
@@ -76,18 +77,23 @@ async def transcribe_audio_file(
     # Extract structured claim fields from the transcription
     fields, missing = extract_claim_fields(result["transcript"])
 
+    resolved_lang = detect_conversation_language(
+        result["transcript"],
+        result.get("detected_language") or language_code,
+    )
+
     # Generate human-like conversational dialogue in speaker's language
     dialogue_info = generate_assistant_dialogue(
         transcript=result["transcript"],
         fields=fields,
         missing_fields=missing,
-        detected_language=result.get("detected_language"),
+        detected_language=resolved_lang,
     )
 
     return VoiceTranscribeResponse(
         transcript=result["transcript"],
         model=result["model"],
-        detected_language=result.get("detected_language"),
+        detected_language=dialogue_info["language"],
         is_mock=result["is_mock"],
         request_metadata=result["request_metadata"],
         fields=fields,
