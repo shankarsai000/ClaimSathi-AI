@@ -9,21 +9,26 @@ Over **75% of Indian policyholders** prefer speaking in their native language or
 
 ---
 
-## 2. Our Solution: ClaimSathi AI
-**ClaimSathi AI** is an **IRDAI-aligned, Voice-First Multilingual Motor Insurance Claim Preparation & Evidence Screening Platform** powered by **Gnani AI Speech APIs (`Prisma v3.0 STT` + `Timbre v2.5 TTS`)**.
+## 2. Our Solution: ClaimSathi AI Powered by Gnani.ai Speech APIs
+**ClaimSathi AI** is an **IRDAI-aligned, Voice-First Multilingual Motor Insurance Claim Preparation & Evidence Screening Platform** powered natively by **Gnani AI's Vachana Speech Platform**:
 
-A policyholder speaks naturally in **Kannada, Telugu, Hindi, Tamil, or English**. ClaimSathi AI detects and locks onto their language, asks voice follow-ups for missing details, normalizes all 5 core insurer fields into **100% clean English for the insurance company**, screens accident photos through a **5-Stage Provenance & Duplicate Engine**, and generates a **9-Section Claim Dossier** downloadable in both **Official English PDF** (for insurers) and the **Customer's Preferred Language** (`ಕನ್ನಡ`, `తెలుగు`, `हिन्दी`, `தமிழ்`, `English`).
+### 🎙️ Exactly How Gnani AI APIs Are Used in ClaimSathi AI:
+1. **Gnani Prisma v3.0 Speech-to-Text (STT) (`https://api.vachana.ai/stt/v3`):**
+   - **How it works:** Ingests live 16-bit 16kHz PCM WAV audio streams directly from the claimant's browser microphone.
+   - **Auto-Language Identification (`indic-auto`):** Prisma v3.0 analyzes the acoustic stream and automatically identifies the spoken Indian language (Kannada, Telugu, Hindi, Tamil, Marathi, Bengali, Gujarati, Malayalam, Punjabi, Urdu, or English).
+   - **Transcription & Normalization:** Employs Prisma v3.0 `transcribe` mode with Inverse Text Normalization (ITN) to accurately capture vehicle registrations, dates, and accident descriptions across regional scripts and code-mixed speech.
+2. **Gnani Timbre v2.5 Text-to-Speech (TTS) (`https://api.vachana.ai/api/v1/tts/inference`):**
+   - **How it works:** Synthesizes clear, low-latency 24kHz WAV audio responses for interactive conversational follow-ups.
+   - **Sticky Dialect Lock:** When an incident field is missing (e.g. incident date or damage detail), the backend invokes Timbre TTS in the claimant's detected native language (`te-IN`, `kn-IN`, `hi-IN`, `ta-IN`) using verified regional neural voices (e.g. `Nalini`), giving users an empathetic, natural conversational experience.
 
 ---
 
 ## 3. Core Technical Innovations
-1. **Gnani Prisma v3.0 STT + Timbre v2.5 TTS with Sticky First-Turn Language Lock:**
-   - Default `indic-auto` mode detects the user's language on the first turn and locks the entire conversation and Timbre TTS responses into that language.
-2. **Strict Per-Field Type Validation, Smart Routing & 100% English Insurer Normalization:**
+1. **Strict Per-Field Type Validation, Smart Routing & 100% English Insurer Normalization:**
    - Converts spoken Indic vehicle/policy numbers (`"ಕೆ ಎ ಥರ್ಟೀ ಫೋರ್ ಟು ಟ್ವೆಂಟಿ ತ್ರೀ"` -> `KA-34-2-23`), transliterates Indic locations (`"पुणे"` -> `Pune`), translates damage into standardized English, rejects irrelevant questions, and routes out-of-order answers to the correct field.
-3. **5-Stage Evidence Provenance & Duplicate Screening + Live Camera Capture:**
+2. **5-Stage Evidence Provenance & Duplicate Screening + Live Camera Capture:**
    - Screens binary magic bytes, **C2PA Content Credentials**, **Google SynthID** markers, **SHA-256 exact duplicates**, and **64-bit DCT Perceptual Hash (pHash)** (Hamming distance $\le 10$ for WhatsApp/resized duplicates), paired with **Server-Tokenized Live WebRTC Camera Capture**.
-4. **Two-Layer Insurer Interoperability & Multilingual Dossier:**
+3. **Two-Layer Insurer Interoperability & Multilingual Dossier:**
    - Exports **Layer 1 Canonical Claim Schema JSON**, **Binary PDF**, and **Localized Reports** (`kn`, `te`, `hi`, `ta`, `en`), plus a **Layer 2 Mock Insurer Gateway**.
 
 ---
@@ -32,9 +37,9 @@ A policyholder speaks naturally in **Kannada, Telugu, Hindi, Tamil, or English**
 We explicitly disclose two real-world limitations of this MVP so there is zero overclaiming:
 
 1. **Deepfake & AI-Image Detection Is Advisory (Not 100% Proof of Authenticity):**
-   - Our screening checks for **C2PA Content Credentials**, **SynthID watermarks**, and **SHA-256 / 64-bit pHash duplicates**. However, if a sophisticated deepfake or AI-edited image has had its metadata stripped or comes from an unwatermarked open-source model, software screening alone **cannot guarantee 100% deepfake detection**. Conversely, standard phone photos without C2PA metadata are marked **`Inconclusive (Manual Surveyor Review Recommended)`**—never falsely certified as "100% authentic." We mitigate this risk via **Guided Live Camera Capture** with server-issued session tokens, but final physical/surveyor verification remains essential.
+   - Our screening checks for **C2PA Content Credentials**, **SynthID watermarks**, and **SHA-256 / 64-bit pHash duplicates**. However, if a sophisticated deepfake or AI-edited image has had its metadata stripped or comes from an unwatermarked open-source model, software screening alone **cannot guarantee 100% deepfake detection**. Unverified photos are marked **`Inconclusive (Manual Surveyor Review Recommended)`**.
 2. **No Real Commercial Insurance Company Tie-Up Yet (Simulated Gateway Only):**
-   - ClaimSathi AI does **not** have live production API integrations or commercial tie-ups with real insurance companies yet. All insurer submissions (`DEMO_INSURER_A`, `BHARAT_GENERAL_MOCK`) run through a **Simulated Layer-2 Insurer Adapter Gateway** and carry a prominent **`DEMO ONLY — Not a Real Insurer Submission`** disclaimer.
+   - ClaimSathi AI does **not** have live production API integrations with real insurance companies yet. Submissions run through a **Simulated Layer-2 Insurer Adapter Gateway** tagged with `DEMO ONLY — Not a Real Insurer Submission`.
 
 ---
 

@@ -65,6 +65,19 @@ flowchart TD
 
 ## 2. Key Innovations & Technical Highlights
 
+### 🎙️ Gnani AI Speech APIs Integration Architecture
+ClaimSathi AI integrates Gnani AI's state-of-the-art Vachana platform across two core endpoints:
+
+1. **Gnani Prisma v3.0 Speech-to-Text (STT) (`https://api.vachana.ai/stt/v3`):**
+   - **Endpoint & Payload:** Calls the v3 REST API with multipart audio file upload (`audio_file`, 16-bit 16kHz mono PCM WAV) authenticated via `X-API-Key-ID`.
+   - **Unified Indian Multilingual Recognition (`indic-auto`):** Supports automatic detection and transcription across 10+ Indian languages (Hindi, Kannada, Telugu, Tamil, Marathi, Bengali, Gujarati, Malayalam, Punjabi, Urdu, and Indian English).
+   - **Inverse Text Normalization (`transcribe` mode):** Automatically standardizes spoken vehicle registration numbers, dates, times, and phone numbers into clean alphanumeric digits.
+   - **Zero Key Leakage:** Client browsers capture raw microphone audio via Web Audio API and stream directly to the FastAPI backend proxy; the Gnani API key is never exposed to the client.
+
+2. **Gnani Timbre v2.5 Text-to-Speech (TTS) (`https://api.vachana.ai/api/v1/tts/inference`):**
+   - **Endpoint & Payload:** Sends structured JSON payloads specifying `text`, `model: "timbre-v2.5"`, `language`, `voice: "Nalini"`, and `audio_config: { encoding: "linear_pcm", container: "wav", sample_rate: 24000 }` via `X-API-Key-ID`.
+   - **Sticky Dialect Voice Follow-Ups:** When core incident fields are missing, the system dynamically generates spoken prompts in the claimant's detected mother tongue (e.g., Kannada, Telugu, Hindi, or Tamil) and streams low-latency WAV audio back to HTML5 Audio players in the browser.
+
 ### 🗣️ Multilingual Voice Engine with Sticky Language Lock
 - **Default Auto-Detect (`indic-auto`)**: The intake engine automatically inspects the customer's very first speech turn across Unicode script ranges and Romanized phonetics (Kannada, Telugu, Hindi, Tamil, Hinglish, Tenglish, Kanglish, Tanglish).
 - **Sticky First-Turn Persistence**: Once detected, the conversational agent locks onto that exact dialect for all follow-up questions and synthesizes native voice responses using Gnani Timbre TTS.
