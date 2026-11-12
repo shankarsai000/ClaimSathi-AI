@@ -244,3 +244,4 @@ During Phase 2.B investigation, an architectural discrepancy was analyzed:
 1. **SMS Gateway Integration:** Telephony SMS carrier delivery is not configured. The system transparently uses simulated local OTP generation (`delivery_channel: "simulated_local"`).
 2. **Deepfake / Generative AI Detection Inconclusiveness:** C2PA and SynthID checks accurately detect provenance signals when present, but standard synthetic images without watermarks return `INCONCLUSIVE` as designed. Human review flags are raised accordingly.
 3. **Database Dual-Mode:** Full transition to PostgreSQL runtime requires migrating `backend/app/database.py` to `asyncpg` or `SQLAlchemy[asyncio]`.
+

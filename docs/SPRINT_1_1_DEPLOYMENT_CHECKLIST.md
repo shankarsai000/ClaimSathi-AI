@@ -120,3 +120,4 @@ If an unexpected production defect occurs:
    ```
 3. **Application Rollback:**
    Revert deployment artifact to the previous verified release tag.
+
