@@ -171,27 +171,26 @@ Provides dual-mode behavior:
   ```
 - Any `../` or encoded `%2e%2e` traversal sequence is rejected.
 
-### 5.3 Controlled, Authenticated Retrieval
+### 5.3 Controlled, Authenticated Retrieval & Ephemeral Media Tickets (Sprint 1.1)
 - Evidence files and report PDFs are never exposed via unauthenticated public URLs.
 - Downloads are served via authenticated streaming responses with security headers:
   - `X-Content-Type-Options: nosniff` (prevents MIME confusion attacks).
   - `Cache-Control: private, no-store, must-revalidate` (prevents intermediate proxy caching).
   - `Content-Disposition: inline` or `attachment; filename=...`.
-- Direct browser media requests (e.g. `<img>`, `<video>`, PDF preview links) support an authenticated query parameter `?token=<jwt_token>`, strictly validated against the claim owner before serving bytes.
+- **Ephemeral Media Access Tickets**: To eliminate the risk of long-lived JWT access tokens leaking into browser history, reverse proxy logs, or referrer headers via URL query strings:
+  - The application provides `POST /api/claims/{claim_id}/media-ticket` issuing an HMAC-signed, 60-second scoped ticket.
+  - Media and report download routes accept `?ticket=<media_ticket>` as an alternative to Bearer headers.
+  - Media tickets are cryptographically barred from being reused as general API tokens on any other endpoint.
 
 ---
 
-## 6. PostgreSQL & Supabase Row-Level Security (RLS)
+## 6. PostgreSQL & Supabase Row-Level Security (RLS) — Zero-Bypass Architecture
 
 ### 6.1 Session Variable & JWT Mapping Function
-A centralized PL/pgSQL helper function determines the authoritative caller:
+A centralized PL/pgSQL helper function determines the authoritative caller with zero bypass backdoors:
 ```sql
 CREATE OR REPLACE FUNCTION current_customer_id() RETURNS TEXT AS $$
 BEGIN
-    IF current_setting('app.bypass_rls', true) = 'true' THEN
-        RETURN 'BYPASS';
-    END IF;
-
     RETURN COALESCE(
         NULLIF(current_setting('app.current_customer_id', true), ''),
         NULLIF(current_setting('request.jwt.claim.sub', true), ''),
@@ -202,8 +201,10 @@ EXCEPTION WHEN OTHERS THEN
 END;
 $$ LANGUAGE plpgsql STABLE;
 ```
+> [!IMPORTANT]
+> In Sprint 1.1, the previous `app.bypass_rls` GUC parameter backdoor was permanently removed. No user-settable session variable can bypass tenant isolation policies. Blanket `GRANT ALL` was revoked from `anon` and `authenticated`, applying explicit least-privilege table grants.
 
-### 6.2 17 Active RLS Policies Across 13 Tables
+### 6.2 17 Active Zero-Bypass RLS Policies Across 13 Tables
 All 13 tables in the database have `ENABLE ROW LEVEL SECURITY` and `FORCE ROW LEVEL SECURITY`:
 1. `users`: `customer_id = current_customer_id()`
 2. `user_consents`: `customer_id = current_customer_id()`
@@ -221,7 +222,7 @@ All 13 tables in the database have `ENABLE ROW LEVEL SECURITY` and `FORCE ROW LE
 
 ### 6.3 Append-Only Audit Log Guarantee
 - `audit_logs` defines explicit policies for `SELECT` and `INSERT`.
-- **Zero policies exist for `UPDATE` or `DELETE`**.
+- **Zero policies exist for `UPDATE` or `DELETE`**, and permissions are explicitly restricted in the PostgreSQL grant matrix.
 - Even an authenticated customer or service caller cannot modify or erase historical audit trail records.
 
 ---
@@ -230,17 +231,17 @@ All 13 tables in the database have `ENABLE ROW LEVEL SECURITY` and `FORCE ROW LE
 
 - **Storage**: Authentication tokens are stored in `localStorage` with reactive cross-tab synchronization via `claimsathi-auth-change`.
 - **Automatic 401 Invalidation**: When any API call receives HTTP 401, `api.ts` clears stored credentials and dispatches `claimsathi-session-expired`, immediately redirecting the user to `/login`.
-- **Direct Media URLs**: Download helper functions (`getEvidenceFileUrl`, `getReportPdfUrl`, `getReportJsonUrl`, `getReportLocalizedUrl`) automatically append `?token=<jwt_token>` for seamless media rendering without public exposure.
+- **Ephemeral Tickets & Authenticated Blob Downloads**: Download utilities (`downloadReportPdf`, `downloadReportJson`, `createMediaTicket`) support secure blob streaming and short-lived tickets.
 - **Production Sanitization**: Demo test cards and universal OTP auto-fills are gated by `import.meta.env.DEV` and are completely stripped in production builds.
 
 ---
 
 ## 8. Verification & Test Matrix
 
-The complete test suite comprises **41 automated tests**, executed via `pytest`:
+The complete test suite comprises **54 automated tests**, executed via `pytest`:
 
 ```
-====================== 41 passed, 14 warnings in 53.81s =======================
+====================== 54 passed, 18 warnings in 72.82s =======================
 ```
 
 ### Baseline Functional Tests (25 Passed)
@@ -248,6 +249,12 @@ The complete test suite comprises **41 automated tests**, executed via `pytest`:
 - `test_claims.py`: Health check, mock transcription, claim creation, validation, retrieval, and listing.
 - `test_master_flow.py`: Registration, vault summary, conversation extraction, evidence duplicate screening (SHA-256 and pHash), SynthID/C2PA provenance rules, guided live capture, dossier generation, and mock insurer gateway.
 - `test_voice.py`: Gnani Prisma STT (v2.5, v3.0), duration limits, unsupported formats, credit handling, Timbre TTS synthesis, and API key protection.
+
+### Sprint 1 Security Hardening Tests (13 Passed)
+- `test_security_sprint1.py`: Token verification, secret enforcement, attempt limiting, complete claim isolation matrix, path traversal rejection, and credential leakage checks.
+
+### Sprint 1.1 Adversarial Regression Tests (13 Passed + 1 Live Verified)
+- `test_security_sprint1_1.py`: Zero-bypass PostgreSQL RLS, audit log immutability, capture session cross-tenant rejection, claim mismatch rejection, replay prevention, bounded streaming read DoS defense (HTTP 413), path traversal containment, ephemeral media tickets, and honest OTP delivery reporting.
 
 ### Sprint 1 Security Tests (16 Passed)
 - `test_auth_missing_token_returns_401`: Verifies unauthenticated protected requests return 401.
@@ -302,3 +309,4 @@ If rollback to Phase 1 state is necessary:
    ```
 2. Switch `APP_ENV=development` in environment configuration.
 3. Restart backend service. Existing customer data and historical claims remain untouched.
+

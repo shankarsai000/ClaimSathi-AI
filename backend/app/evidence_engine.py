@@ -474,11 +474,24 @@ async def screen_and_store_evidence(
     check_id = f"CHK-{uuid4().hex[:8].upper()}"
     now = datetime.utcnow()
 
-    # 8. Store original immutable file on disk
-    claim_dir = STORAGE_ROOT / claim_id
+    # 8. Store original immutable file on disk with strict path traversal immunity
+    claim_dir = (STORAGE_ROOT / claim_id).resolve()
     claim_dir.mkdir(parents=True, exist_ok=True)
-    safe_fname = re.sub(r"[^A-Za-z0-9_.\-]", "_", filename or f"{evidence_id}.{format_label.lower()}")
-    disk_path = claim_dir / f"{evidence_id}_{safe_fname}"
+    clean_name = Path(filename).name if filename else ""
+    safe_fname = re.sub(r"[^A-Za-z0-9_.\-]", "_", clean_name)
+    safe_fname = re.sub(r"\.{2,}", "_", safe_fname)  # eliminate ..
+    if not safe_fname or safe_fname.startswith("."):
+        safe_fname = f"{evidence_id}.{format_label.lower()}"
+    disk_path = (claim_dir / f"{evidence_id}_{safe_fname}").resolve()
+
+    # Defensive path check: target disk_path MUST reside under claim_dir
+    try:
+        disk_path.relative_to(claim_dir)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Security error: Invalid target file path outside permitted claim directory.",
+        )
     disk_path.write_bytes(file_bytes)
 
     check_record = EvidenceCheckRecord(

@@ -51,6 +51,40 @@ def verify_password(password: str, stored_hash: str) -> bool:
     return hmac.compare_digest(computed, stored_hash)
 
 
+def validate_password_strength(password: str) -> None:
+    """
+    Validate password complexity against corporate security standards.
+    In production: Requires min 8 characters with uppercase, lowercase, and numeric digits.
+    In development: Requires min 4 characters.
+    """
+    settings = get_settings()
+    is_prod = (settings.app_env or "").lower() == "production"
+
+    if not password:
+        raise HTTPException(status_code=400, detail="Password cannot be empty.")
+
+    if is_prod:
+        if len(password) < 8:
+            raise HTTPException(
+                status_code=400,
+                detail="Password must be at least 8 characters long in production.",
+            )
+        has_upper = any(c.isupper() for c in password)
+        has_lower = any(c.islower() for c in password)
+        has_digit = any(c.isdigit() for c in password)
+        if not (has_upper and has_lower and has_digit):
+            raise HTTPException(
+                status_code=400,
+                detail="Password must contain at least one uppercase letter, one lowercase letter, and one number.",
+            )
+    else:
+        if len(password) < 4:
+            raise HTTPException(
+                status_code=400,
+                detail="Password must be at least 4 characters long.",
+            )
+
+
 # ── Base64URL Helpers ───────────────────────────────────────────────
 def _b64url_encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
@@ -139,6 +173,13 @@ def decode_access_token(token: str) -> Dict[str, Any]:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    if header.get("typ") != "JWT":
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid token type. Only standard JWT access tokens are accepted.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     # 2. Verify signature with constant-time comparison
     signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
     expected_sig = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
@@ -176,6 +217,13 @@ def decode_access_token(token: str) -> Dict[str, Any]:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    if payload.get("type") == "media_ticket":
+        raise HTTPException(
+            status_code=401,
+            detail="Media access tickets cannot be used as API access tokens.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     now = int(time.time())
     exp = payload.get("exp")
     if not exp or not isinstance(exp, (int, float)) or exp < now:
@@ -191,6 +239,95 @@ def decode_access_token(token: str) -> Dict[str, Any]:
             status_code=401,
             detail="Token issued in the future. Please check system clock.",
             headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return payload
+
+
+# ── Ephemeral Media Access Tickets (Phase 2.D) ──────────────────────
+def create_media_ticket(customer_id: str, claim_id: str, expires_in: int = 60) -> str:
+    """
+    Generate an ephemeral, HMAC-signed media ticket for safe single-asset/report downloads.
+    Strictly scoped to a customer_id and claim_id with a short TTL (default 60s).
+    Cannot be used for general API operations.
+    """
+    settings = get_settings()
+    secret = settings.get_jwt_secret()
+    now = int(time.time())
+    expiry = now + expires_in
+
+    header = {"alg": "HS256", "typ": "MEDIA_TICKET"}
+    payload = {
+        "sub": customer_id,
+        "claim_id": claim_id,
+        "type": "media_ticket",
+        "iat": now,
+        "exp": expiry,
+    }
+
+    header_b64 = _b64url_encode(json.dumps(header, separators=(",", ":")).encode("utf-8"))
+    payload_b64 = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
+
+    signature = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    sig_b64 = _b64url_encode(signature)
+    return f"{header_b64}.{payload_b64}.{sig_b64}"
+
+
+def verify_media_ticket(ticket: str, claim_id: str) -> Dict[str, Any]:
+    """
+    Verify an ephemeral media access ticket.
+    Enforces signature, expiration, type 'media_ticket', and claim_id match.
+    Raises HTTP 401 or 403 on any failure.
+    """
+    settings = get_settings()
+    secret = settings.get_jwt_secret()
+
+    if not ticket or not isinstance(ticket, str):
+        raise HTTPException(
+            status_code=401,
+            detail="Missing or invalid media ticket.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    parts = ticket.strip().split(".")
+    if len(parts) != 3:
+        raise HTTPException(
+            status_code=401,
+            detail="Malformed media ticket format.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    header_b64, payload_b64, sig_b64 = parts
+
+    signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
+    expected_sig = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    try:
+        actual_sig = _b64url_decode(sig_b64)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid media ticket signature encoding.")
+
+    if not hmac.compare_digest(expected_sig, actual_sig):
+        raise HTTPException(status_code=401, detail="Invalid media ticket signature.")
+
+    try:
+        payload = json.loads(_b64url_decode(payload_b64).decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid media ticket payload.")
+
+    if payload.get("type") != "media_ticket":
+        raise HTTPException(status_code=401, detail="Provided token is not a media access ticket.")
+
+    now = int(time.time())
+    exp = payload.get("exp", 0)
+    if exp < now:
+        raise HTTPException(status_code=401, detail="Media access ticket has expired.")
+
+    ticket_claim = payload.get("claim_id")
+    if not ticket_claim or ticket_claim != claim_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Media ticket is not authorized for this claim.",
         )
 
     return payload

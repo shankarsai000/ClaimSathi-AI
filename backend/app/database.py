@@ -1110,6 +1110,23 @@ async def get_capture_session(session_id: str) -> Optional[Dict[str, Any]]:
         return dict(row) if row else None
 
 
+async def mark_capture_session_completed(session_id: str, claim_id: Optional[str] = None) -> None:
+    """Mark a live capture session as completed and permanently bind it to the claim."""
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        if claim_id:
+            await db.execute(
+                "UPDATE capture_sessions SET status = 'completed', completed_at = ?, claim_id = COALESCE(claim_id, ?) WHERE session_id = ?",
+                (now, claim_id, session_id),
+            )
+        else:
+            await db.execute(
+                "UPDATE capture_sessions SET status = 'completed', completed_at = ? WHERE session_id = ?",
+                (now, session_id),
+            )
+        await db.commit()
+
+
 # ── Reports & Insurer Submissions Persistence ──────────
 async def save_generated_report(
     report_id: str,

@@ -17,6 +17,7 @@ from ..models import (
 from ..auth import (
     create_access_token,
     verify_password,
+    validate_password_strength,
     generate_otp,
     verify_otp,
     get_current_user,
@@ -44,8 +45,7 @@ async def register_customer(request: RegisterRequest):
     if existing:
         raise HTTPException(status_code=400, detail="An account with this email already exists.")
 
-    if len((request.password or "").strip()) < 4:
-        raise HTTPException(status_code=400, detail="Password must be at least 4 characters long.")
+    validate_password_strength(request.password)
 
     profile = await create_user_account(
         name=request.name.strip(),
@@ -80,15 +80,22 @@ async def request_login_otp(request: OTPRequest):
     check_login_rate_limit(request.identifier)
     otp = generate_otp(request.identifier)
 
-    resp: Dict[str, Any] = {
-        "identifier": request.identifier,
-        "otp_sent": True,
-        "message": "Verification OTP sent successfully (valid for 5 minutes).",
-    }
-    # Expose demo OTP code in response ONLY when not in production
+    # Distinguish production from simulated local development delivery
     if not is_prod:
-        resp["demo_otp_code"] = otp
-        resp["message"] = f"Verification OTP sent (Demo OTP: {otp})."
+        resp: Dict[str, Any] = {
+            "identifier": request.identifier,
+            "otp_sent": False,
+            "delivery_channel": "simulated_local",
+            "demo_otp_code": otp,
+            "message": f"Verification OTP simulated locally: {otp} (No SMS carrier provider configured).",
+        }
+    else:
+        resp = {
+            "identifier": request.identifier,
+            "otp_sent": False,
+            "delivery_channel": "unconfigured",
+            "message": "OTP generated. Telephony SMS carrier integration is not configured in this environment.",
+        }
 
     await log_audit_event(
         user_id=request.identifier,

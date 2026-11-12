@@ -25,7 +25,12 @@ from ..models import (
     InsurerSubmissionRequest,
     InsurerSubmissionResponse,
 )
-from ..auth import get_optional_user, decode_access_token
+from ..auth import (
+    get_optional_user,
+    decode_access_token,
+    create_media_ticket,
+    verify_media_ticket,
+)
 from ..authorization import get_authorized_claim_or_demo
 from ..database import (
     insert_claim,
@@ -365,15 +370,48 @@ async def get_latest_claim_report(
     return reports[0]
 
 
+@router.post("/{claim_id}/media-ticket")
+async def create_claim_media_ticket(
+    claim_id: str,
+    claim: ClaimRecord = Depends(get_authorized_claim_or_demo),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """
+    Issue an ephemeral (60-second) HMAC-signed media ticket for safe media and report downloads.
+    Strictly verifies that the caller owns the claim.
+    """
+    user_id = current_user.get("sub") if current_user else claim.customer_id
+    ticket = create_media_ticket(customer_id=user_id, claim_id=claim_id, expires_in=60)
+    return {
+        "ticket": ticket,
+        "claim_id": claim_id,
+        "expires_in": 60,
+    }
+
+
 @router.get("/{claim_id}/report/pdf")
 async def download_claim_report_pdf(
     claim_id: str,
     version: Optional[str] = Query(None),
-    claim: ClaimRecord = Depends(get_authorized_claim_or_demo),
+    ticket: Optional[str] = Query(None, description="Ephemeral media ticket"),
+    authorization: Optional[str] = Header(None),
+    token: Optional[str] = Query(None),
     current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ):
     """Download the binary PDF report for the 9-Section Dossier. Enforces claim ownership."""
-    user_id = current_user.get("sub") if current_user else claim.customer_id
+    claim = await get_claim(claim_id)
+    if not claim:
+        raise HTTPException(status_code=404, detail=f"Claim '{claim_id}' not found.")
+
+    if ticket:
+        ticket_data = verify_media_ticket(ticket, claim_id)
+        user_id = ticket_data.get("sub", "")
+        if claim.customer_id != user_id and not (claim.is_demo and user_id == "USR-100001"):
+            raise HTTPException(status_code=403, detail="Access denied: Media ticket customer mismatch.")
+    else:
+        authorized_claim = await get_authorized_claim_or_demo(claim_id, current_user)
+        user_id = current_user.get("sub") if current_user else authorized_claim.customer_id
+
     report = await get_latest_claim_report(claim_id, version=version, claim=claim, current_user=current_user)
     pdf_path = Path(report["pdf_storage_path"])
     if pdf_path.exists():
@@ -407,14 +445,28 @@ async def download_claim_report_localized(
     lang: str = Query("en", description="Preferred report language: en, kn, te, hi, ta"),
     download: bool = Query(False, description="Force attachment download if true"),
     version: Optional[str] = Query(None),
-    claim: ClaimRecord = Depends(get_authorized_claim_or_demo),
+    ticket: Optional[str] = Query(None, description="Ephemeral media ticket"),
+    authorization: Optional[str] = Header(None),
+    token: Optional[str] = Query(None),
     current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ):
     """
     Render or download the 9-Section Claim Dossier in the customer's preferred language.
     Enforces claim ownership.
     """
-    user_id = current_user.get("sub") if current_user else claim.customer_id
+    claim = await get_claim(claim_id)
+    if not claim:
+        raise HTTPException(status_code=404, detail=f"Claim '{claim_id}' not found.")
+
+    if ticket:
+        ticket_data = verify_media_ticket(ticket, claim_id)
+        user_id = ticket_data.get("sub", "")
+        if claim.customer_id != user_id and not (claim.is_demo and user_id == "USR-100001"):
+            raise HTTPException(status_code=403, detail="Access denied: Media ticket customer mismatch.")
+    else:
+        authorized_claim = await get_authorized_claim_or_demo(claim_id, current_user)
+        user_id = current_user.get("sub") if current_user else authorized_claim.customer_id
+
     report = await get_latest_claim_report(claim_id, version=version, claim=claim, current_user=current_user)
     from ..models import ProfessionalClaimDossier
     dossier_obj = ProfessionalClaimDossier(**report["dossier"])
@@ -443,11 +495,25 @@ async def download_claim_report_localized(
 async def download_claim_canonical_json(
     claim_id: str,
     version: Optional[str] = Query(None),
-    claim: ClaimRecord = Depends(get_authorized_claim_or_demo),
+    ticket: Optional[str] = Query(None, description="Ephemeral media ticket"),
+    authorization: Optional[str] = Header(None),
+    token: Optional[str] = Query(None),
     current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ):
     """Download Layer 1 — ClaimSathi Canonical Schema JSON. Enforces claim ownership."""
-    user_id = current_user.get("sub") if current_user else claim.customer_id
+    claim = await get_claim(claim_id)
+    if not claim:
+        raise HTTPException(status_code=404, detail=f"Claim '{claim_id}' not found.")
+
+    if ticket:
+        ticket_data = verify_media_ticket(ticket, claim_id)
+        user_id = ticket_data.get("sub", "")
+        if claim.customer_id != user_id and not (claim.is_demo and user_id == "USR-100001"):
+            raise HTTPException(status_code=403, detail="Access denied: Media ticket customer mismatch.")
+    else:
+        authorized_claim = await get_authorized_claim_or_demo(claim_id, current_user)
+        user_id = current_user.get("sub") if current_user else authorized_claim.customer_id
+
     report = await get_latest_claim_report(claim_id, version=version, claim=claim, current_user=current_user)
     canonical_bytes = json.dumps(report["canonical_schema"], indent=2).encode("utf-8")
     filename = f"ClaimSathi_Canonical_{claim_id}_v{report['version']}.json"

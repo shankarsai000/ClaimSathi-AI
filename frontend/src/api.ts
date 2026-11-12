@@ -246,10 +246,43 @@ export const api = {
   listClaimEvidence: (claimId: string) =>
     request<EvidenceAssetRecord[]>(`/evidence/${encodeURIComponent(claimId)}`),
 
-  getEvidenceFileUrl: (claimId: string, evidenceId: string) => {
+  createMediaTicket: (claimId: string) =>
+    request<{ ticket: string; claim_id: string; expires_in: number }>(
+      `/claims/${encodeURIComponent(claimId)}/media-ticket`,
+      { method: 'POST' }
+    ),
+
+  getEvidenceFileUrl: (claimId: string, evidenceId: string, ticket?: string) => {
+    if (ticket) {
+      return `${BASE}/evidence/${encodeURIComponent(claimId)}/file/${encodeURIComponent(evidenceId)}?ticket=${encodeURIComponent(ticket)}`
+    }
     const token = getStoredToken()
     const tokenParam = token ? `?token=${encodeURIComponent(token)}` : ''
     return `${BASE}/evidence/${encodeURIComponent(claimId)}/file/${encodeURIComponent(evidenceId)}${tokenParam}`
+  },
+
+  downloadReportPdf: async (claimId: string, version?: string): Promise<Blob> => {
+    const token = getStoredToken()
+    const url = `${BASE}/claims/${encodeURIComponent(claimId)}/report/pdf${version ? `?version=${encodeURIComponent(version)}` : ''}`
+    const resp = await fetch(url, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    if (!resp.ok) {
+      throw new Error(`PDF download failed with status ${resp.status}`)
+    }
+    return resp.blob()
+  },
+
+  downloadReportJson: async (claimId: string, version?: string): Promise<any> => {
+    const token = getStoredToken()
+    const url = `${BASE}/claims/${encodeURIComponent(claimId)}/report/json${version ? `?version=${encodeURIComponent(version)}` : ''}`
+    const resp = await fetch(url, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    if (!resp.ok) {
+      throw new Error(`JSON download failed with status ${resp.status}`)
+    }
+    return resp.json()
   },
 
   // ── Phase 5, 6 & 7: Claims, Confirmation, 9-Section Dossier, PDF & Mock Insurer Gateway ──

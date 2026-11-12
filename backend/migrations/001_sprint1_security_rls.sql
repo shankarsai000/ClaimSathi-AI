@@ -1,12 +1,13 @@
 -- ==============================================================================
--- ClaimSathi AI — Sprint 1: Security Hardening & Row-Level Security (RLS) Migration
+-- ClaimSathi AI — Sprint 1.1: Security Hardening & Zero-Bypass Row-Level Security (RLS)
 -- Target: PostgreSQL / Supabase
 -- Purpose:
 --   1. Enforce strict multi-tenant customer-level data isolation via RLS policies.
---   2. Ensure claims, evidence assets, reports, conversations and consents can
---      ONLY be accessed by the authenticated customer who owns them.
---   3. Guard audit logs against modification or deletion (append-only).
---   4. Support both PostgreSQL session variable (`app.current_customer_id`) and
+--   2. ELIMINATE all backdoor bypass mechanisms (no app.bypass_rls GUC parameter).
+--   3. Restrict database role privileges according to the principle of least privilege
+--      (remove blanket GRANT ALL to anon and authenticated).
+--   4. Ensure audit logs are strictly append-only (SELECT & INSERT only, NO UPDATE/DELETE).
+--   5. Support both PostgreSQL session variable (`app.current_customer_id`) and
 --      Supabase PostgREST JWT claims (`request.jwt.claims ->> 'sub'`).
 -- ==============================================================================
 
@@ -28,15 +29,10 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_claim_id ON audit_logs(claim_id);
 
 -- 2. Helper function to extract current authenticated customer ID
--- Reads from session context (app.current_customer_id) or Supabase JWT context
+-- Reads strictly from session context (app.current_customer_id) or Supabase JWT context.
+-- NO BYPASS BACKDOOR: Never checks user-settable bypass flags.
 CREATE OR REPLACE FUNCTION current_customer_id() RETURNS TEXT AS $$
 BEGIN
-    -- Check for bypass flag (e.g. system maintenance worker or tests running with bypass flag)
-    IF current_setting('app.bypass_rls', true) = 'true' THEN
-        RETURN 'BYPASS';
-    END IF;
-
-    -- Return session parameter or JWT sub claim
     RETURN COALESCE(
         NULLIF(current_setting('app.current_customer_id', true), ''),
         NULLIF(current_setting('request.jwt.claim.sub', true), ''),
@@ -76,7 +72,7 @@ ALTER TABLE insurer_submissions FORCE ROW LEVEL SECURITY;
 ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_logs FORCE ROW LEVEL SECURITY;
 
--- 4. Drop existing policies to allow idempotent execution
+-- 4. Drop existing policies to allow clean, idempotent re-application
 DROP POLICY IF EXISTS users_isolation_policy ON users;
 DROP POLICY IF EXISTS user_consents_isolation_policy ON user_consents;
 DROP POLICY IF EXISTS conversations_isolation_policy ON conversations;
@@ -95,89 +91,89 @@ DROP POLICY IF EXISTS insurer_submissions_isolation_policy ON insurer_submission
 DROP POLICY IF EXISTS audit_logs_isolation_select ON audit_logs;
 DROP POLICY IF EXISTS audit_logs_isolation_insert ON audit_logs;
 
--- 5. Create explicit Row-Level Security policies
+-- 5. Create explicit Row-Level Security policies (Zero-Bypass)
 
 -- Table: users
 CREATE POLICY users_isolation_policy ON users
     FOR ALL
     USING (
-        current_customer_id() = 'BYPASS'
-        OR customer_id = current_customer_id()
+        current_customer_id() IS NOT NULL
+        AND customer_id = current_customer_id()
     )
     WITH CHECK (
-        current_customer_id() = 'BYPASS'
-        OR customer_id = current_customer_id()
+        current_customer_id() IS NOT NULL
+        AND customer_id = current_customer_id()
     );
 
 -- Table: user_consents
 CREATE POLICY user_consents_isolation_policy ON user_consents
     FOR ALL
     USING (
-        current_customer_id() = 'BYPASS'
-        OR customer_id = current_customer_id()
+        current_customer_id() IS NOT NULL
+        AND customer_id = current_customer_id()
     )
     WITH CHECK (
-        current_customer_id() = 'BYPASS'
-        OR customer_id = current_customer_id()
+        current_customer_id() IS NOT NULL
+        AND customer_id = current_customer_id()
     );
 
 -- Table: conversations
 CREATE POLICY conversations_isolation_policy ON conversations
     FOR ALL
     USING (
-        current_customer_id() = 'BYPASS'
-        OR customer_id = current_customer_id()
+        current_customer_id() IS NOT NULL
+        AND customer_id = current_customer_id()
     )
     WITH CHECK (
-        current_customer_id() = 'BYPASS'
-        OR customer_id = current_customer_id()
+        current_customer_id() IS NOT NULL
+        AND customer_id = current_customer_id()
     );
 
 -- Table: claims
 CREATE POLICY claims_isolation_select ON claims
     FOR SELECT
     USING (
-        current_customer_id() = 'BYPASS'
-        OR customer_id = current_customer_id()
+        current_customer_id() IS NOT NULL
+        AND customer_id = current_customer_id()
     );
 
 CREATE POLICY claims_isolation_insert ON claims
     FOR INSERT
     WITH CHECK (
-        current_customer_id() = 'BYPASS'
-        OR customer_id = current_customer_id()
+        current_customer_id() IS NOT NULL
+        AND customer_id = current_customer_id()
     );
 
 CREATE POLICY claims_isolation_update ON claims
     FOR UPDATE
     USING (
-        current_customer_id() = 'BYPASS'
-        OR customer_id = current_customer_id()
+        current_customer_id() IS NOT NULL
+        AND customer_id = current_customer_id()
     )
     WITH CHECK (
-        current_customer_id() = 'BYPASS'
-        OR customer_id = current_customer_id()
+        current_customer_id() IS NOT NULL
+        AND customer_id = current_customer_id()
     );
 
 CREATE POLICY claims_isolation_delete ON claims
     FOR DELETE
     USING (
-        current_customer_id() = 'BYPASS'
-        OR customer_id = current_customer_id()
+        current_customer_id() IS NOT NULL
+        AND customer_id = current_customer_id()
     );
 
 -- Table: claim_fields
 CREATE POLICY claim_fields_isolation_policy ON claim_fields
     FOR ALL
     USING (
-        current_customer_id() = 'BYPASS'
-        OR claim_id IN (
+        current_customer_id() IS NOT NULL
+        AND claim_id IN (
             SELECT id FROM claims WHERE customer_id = current_customer_id()
         )
     )
     WITH CHECK (
-        current_customer_id() = 'BYPASS'
-        OR claim_id IN (
+        current_customer_id() IS NOT NULL
+        AND claim_id IN (
             SELECT id FROM claims WHERE customer_id = current_customer_id()
         )
     );
@@ -186,17 +182,21 @@ CREATE POLICY claim_fields_isolation_policy ON claim_fields
 CREATE POLICY evidence_assets_isolation_policy ON evidence_assets
     FOR ALL
     USING (
-        current_customer_id() = 'BYPASS'
-        OR customer_id = current_customer_id()
-        OR claim_id IN (
-            SELECT id FROM claims WHERE customer_id = current_customer_id()
+        current_customer_id() IS NOT NULL
+        AND (
+            customer_id = current_customer_id()
+            OR claim_id IN (
+                SELECT id FROM claims WHERE customer_id = current_customer_id()
+            )
         )
     )
     WITH CHECK (
-        current_customer_id() = 'BYPASS'
-        OR customer_id = current_customer_id()
-        OR claim_id IN (
-            SELECT id FROM claims WHERE customer_id = current_customer_id()
+        current_customer_id() IS NOT NULL
+        AND (
+            customer_id = current_customer_id()
+            OR claim_id IN (
+                SELECT id FROM claims WHERE customer_id = current_customer_id()
+            )
         )
     );
 
@@ -204,21 +204,25 @@ CREATE POLICY evidence_assets_isolation_policy ON evidence_assets
 CREATE POLICY evidence_checks_isolation_policy ON evidence_checks
     FOR ALL
     USING (
-        current_customer_id() = 'BYPASS'
-        OR claim_id IN (
-            SELECT id FROM claims WHERE customer_id = current_customer_id()
-        )
-        OR asset_id IN (
-            SELECT asset_id FROM evidence_assets WHERE customer_id = current_customer_id()
+        current_customer_id() IS NOT NULL
+        AND (
+            claim_id IN (
+                SELECT id FROM claims WHERE customer_id = current_customer_id()
+            )
+            OR asset_id IN (
+                SELECT asset_id FROM evidence_assets WHERE customer_id = current_customer_id()
+            )
         )
     )
     WITH CHECK (
-        current_customer_id() = 'BYPASS'
-        OR claim_id IN (
-            SELECT id FROM claims WHERE customer_id = current_customer_id()
-        )
-        OR asset_id IN (
-            SELECT asset_id FROM evidence_assets WHERE customer_id = current_customer_id()
+        current_customer_id() IS NOT NULL
+        AND (
+            claim_id IN (
+                SELECT id FROM claims WHERE customer_id = current_customer_id()
+            )
+            OR asset_id IN (
+                SELECT asset_id FROM evidence_assets WHERE customer_id = current_customer_id()
+            )
         )
     );
 
@@ -226,14 +230,14 @@ CREATE POLICY evidence_checks_isolation_policy ON evidence_checks
 CREATE POLICY reports_isolation_policy ON reports
     FOR ALL
     USING (
-        current_customer_id() = 'BYPASS'
-        OR claim_id IN (
+        current_customer_id() IS NOT NULL
+        AND claim_id IN (
             SELECT id FROM claims WHERE customer_id = current_customer_id()
         )
     )
     WITH CHECK (
-        current_customer_id() = 'BYPASS'
-        OR claim_id IN (
+        current_customer_id() IS NOT NULL
+        AND claim_id IN (
             SELECT id FROM claims WHERE customer_id = current_customer_id()
         )
     );
@@ -242,14 +246,14 @@ CREATE POLICY reports_isolation_policy ON reports
 CREATE POLICY claim_status_events_isolation_policy ON claim_status_events
     FOR ALL
     USING (
-        current_customer_id() = 'BYPASS'
-        OR claim_id IN (
+        current_customer_id() IS NOT NULL
+        AND claim_id IN (
             SELECT id FROM claims WHERE customer_id = current_customer_id()
         )
     )
     WITH CHECK (
-        current_customer_id() = 'BYPASS'
-        OR claim_id IN (
+        current_customer_id() IS NOT NULL
+        AND claim_id IN (
             SELECT id FROM claims WHERE customer_id = current_customer_id()
         )
     );
@@ -258,14 +262,14 @@ CREATE POLICY claim_status_events_isolation_policy ON claim_status_events
 CREATE POLICY timeline_events_isolation_policy ON timeline_events
     FOR ALL
     USING (
-        current_customer_id() = 'BYPASS'
-        OR claim_id IN (
+        current_customer_id() IS NOT NULL
+        AND claim_id IN (
             SELECT id FROM claims WHERE customer_id = current_customer_id()
         )
     )
     WITH CHECK (
-        current_customer_id() = 'BYPASS'
-        OR claim_id IN (
+        current_customer_id() IS NOT NULL
+        AND claim_id IN (
             SELECT id FROM claims WHERE customer_id = current_customer_id()
         )
     );
@@ -274,20 +278,24 @@ CREATE POLICY timeline_events_isolation_policy ON timeline_events
 CREATE POLICY capture_sessions_isolation_policy ON capture_sessions
     FOR ALL
     USING (
-        current_customer_id() = 'BYPASS'
-        OR customer_id = current_customer_id()
-        OR (
-            claim_id IS NOT NULL AND claim_id IN (
-                SELECT id FROM claims WHERE customer_id = current_customer_id()
+        current_customer_id() IS NOT NULL
+        AND (
+            customer_id = current_customer_id()
+            OR (
+                claim_id IS NOT NULL AND claim_id IN (
+                    SELECT id FROM claims WHERE customer_id = current_customer_id()
+                )
             )
         )
     )
     WITH CHECK (
-        current_customer_id() = 'BYPASS'
-        OR customer_id = current_customer_id()
-        OR (
-            claim_id IS NOT NULL AND claim_id IN (
-                SELECT id FROM claims WHERE customer_id = current_customer_id()
+        current_customer_id() IS NOT NULL
+        AND (
+            customer_id = current_customer_id()
+            OR (
+                claim_id IS NOT NULL AND claim_id IN (
+                    SELECT id FROM claims WHERE customer_id = current_customer_id()
+                )
             )
         )
     );
@@ -296,14 +304,14 @@ CREATE POLICY capture_sessions_isolation_policy ON capture_sessions
 CREATE POLICY insurer_submissions_isolation_policy ON insurer_submissions
     FOR ALL
     USING (
-        current_customer_id() = 'BYPASS'
-        OR claim_id IN (
+        current_customer_id() IS NOT NULL
+        AND claim_id IN (
             SELECT id FROM claims WHERE customer_id = current_customer_id()
         )
     )
     WITH CHECK (
-        current_customer_id() = 'BYPASS'
-        OR claim_id IN (
+        current_customer_id() IS NOT NULL
+        AND claim_id IN (
             SELECT id FROM claims WHERE customer_id = current_customer_id()
         )
     );
@@ -312,20 +320,39 @@ CREATE POLICY insurer_submissions_isolation_policy ON insurer_submissions
 CREATE POLICY audit_logs_isolation_select ON audit_logs
     FOR SELECT
     USING (
-        current_customer_id() = 'BYPASS'
-        OR user_id = current_customer_id()
+        current_customer_id() IS NOT NULL
+        AND user_id = current_customer_id()
     );
 
 CREATE POLICY audit_logs_isolation_insert ON audit_logs
     FOR INSERT
     WITH CHECK (
-        current_customer_id() = 'BYPASS'
-        OR user_id = current_customer_id()
+        current_customer_id() IS NOT NULL
+        AND user_id = current_customer_id()
     );
 
--- 6. Permissions: Ensure anon and authenticated roles can query public tables subject to RLS
-GRANT USAGE ON SCHEMA public TO anon, authenticated;
-GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated;
-GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated;
-GRANT ALL ON ALL ROUTINES IN SCHEMA public TO anon, authenticated;
+-- 6. Least-Privilege Permissions: REVOKE blanket access, GRANT explicit minimal permissions
+-- Revoke any prior blanket grants
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon, authenticated;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon, authenticated;
+REVOKE ALL ON ALL ROUTINES IN SCHEMA public FROM anon, authenticated;
 
+-- Grant schema usage
+GRANT USAGE ON SCHEMA public TO anon, authenticated;
+
+-- Function execution
+GRANT EXECUTE ON FUNCTION current_customer_id() TO anon, authenticated;
+
+-- Authenticated role: CRUD permissions constrained by RLS
+GRANT SELECT, INSERT, UPDATE, DELETE ON claims, claim_fields, evidence_assets, evidence_checks,
+    reports, claim_status_events, timeline_events, capture_sessions, insurer_submissions,
+    conversations, user_consents TO authenticated;
+
+-- Users table: SELECT and UPDATE own profile only (no DELETE)
+GRANT SELECT, UPDATE ON users TO authenticated;
+
+-- Audit logs table: SELECT and INSERT only (strictly NO UPDATE, NO DELETE)
+GRANT SELECT, INSERT ON audit_logs TO authenticated;
+
+-- Sequences for autoincrementing IDs (if any exist)
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO authenticated;
