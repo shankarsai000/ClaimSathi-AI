@@ -17,6 +17,8 @@ from .routes import health, claims, voice, auth, evidence
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    settings = get_settings()
+    settings.validate_production_configuration()
     await init_db()
     yield
 

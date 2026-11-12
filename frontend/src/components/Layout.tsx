@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Outlet, Link, useLocation, useNavigate, Navigate } from 'react-router-dom'
 import { LayoutDashboard, PlusCircle, Shield, UserCheck, LogOut, Settings, Globe } from 'lucide-react'
-import { getStoredUser, clearStoredAuth } from '../api'
+import { getStoredUser, clearStoredAuth, api } from '../api'
 import type { UserProfile } from '../types'
 import { APP_LANGUAGES, useAppSettings, type AppLanguageCode } from '../i18n'
 import SettingsModal from './SettingsModal'
@@ -14,17 +14,25 @@ export default function Layout() {
 
   useEffect(() => {
     const syncAuth = () => setUser(getStoredUser())
+    const handleExpired = () => {
+      setUser(null)
+      navigate('/login', { replace: true })
+    }
     window.addEventListener('claimsathi-auth-change', syncAuth)
-    return () => window.removeEventListener('claimsathi-auth-change', syncAuth)
-  }, [])
+    window.addEventListener('claimsathi-session-expired', handleExpired)
+    return () => {
+      window.removeEventListener('claimsathi-auth-change', syncAuth)
+      window.removeEventListener('claimsathi-session-expired', handleExpired)
+    }
+  }, [navigate])
 
   // Require login first before accessing protected pages
   if (!user) {
     return <Navigate to="/login" replace />
   }
 
-  const handleLogout = () => {
-    clearStoredAuth()
+  const handleLogout = async () => {
+    await api.logout()
     navigate('/login', { replace: true })
   }
 

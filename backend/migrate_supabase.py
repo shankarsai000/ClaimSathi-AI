@@ -1,7 +1,22 @@
+import os
 import asyncio
 import asyncpg
+from pathlib import Path
+from dotenv import load_dotenv
 
-PG_URI = "postgresql://postgres.btflaabvtrjlfrmqrslg:R.7D%2FcyXP%2C%259X%2Be@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres"
+# Load environment variables from backend/.env or parent .env
+env_path = Path(__file__).resolve().parent / ".env"
+if env_path.exists():
+    load_dotenv(env_path)
+else:
+    load_dotenv()
+
+PG_URI = os.getenv("DATABASE_URL")
+if not PG_URI:
+    raise RuntimeError(
+        "DATABASE_URL environment variable is required to run Supabase migration. "
+        "Set it in backend/.env or your environment."
+    )
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS users (

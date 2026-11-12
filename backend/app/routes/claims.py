@@ -1,14 +1,16 @@
 """
 Claims, Dossier Generation & Mock Insurer Gateway Routes for ClaimSathi AI (Phases 1–7).
+Enforces customer identity verification and claim-level ownership controls (Sprint 1).
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 from uuid import uuid4
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 
+from ..config import get_settings
 from ..models import (
     ClaimCreateRequest,
     ClaimUpdateRequest,
@@ -23,7 +25,8 @@ from ..models import (
     InsurerSubmissionRequest,
     InsurerSubmissionResponse,
 )
-from ..auth import get_optional_current_user_id, decode_access_token
+from ..auth import get_optional_user, decode_access_token
+from ..authorization import get_authorized_claim_or_demo
 from ..database import (
     insert_claim,
     get_claim,
@@ -74,7 +77,7 @@ async def extract_text_intake(payload: dict):
     """
     Phase 2 & 3 Multilingual Text Intake:
     Extracts structured claim fields and generates conversational follow-up prompts
-    using the real backend NLP extraction engine.
+    using the backend NLP extraction engine.
     """
     text = (payload.get("text") or "").strip()
     language_hint = payload.get("language") or "indic-auto"
@@ -120,27 +123,33 @@ async def validate_field_answer_endpoint(payload: dict):
 @router.post("/", response_model=ClaimCreateResponse, status_code=201)
 async def create_claim(
     request: ClaimCreateRequest,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
     authorization: Optional[str] = Header(None),
 ):
     """
     Create a claim case from extracted & confirmed fields.
-    - When authenticated or customer_id is provided, generates official ClaimSathi ID (CS-2026-000124).
-    - Preserves DEMO-XXXXXXXX prefix for unauthenticated Phase 1 legacy test calls.
+    Security: Always derives customer identity strictly from the verified authentication context.
+    Never trusts client-supplied customer_id in request bodies.
     """
-    now = datetime.utcnow()
+    settings = get_settings()
+    is_prod = (settings.app_env or "").lower() == "production"
+    now = datetime.now(timezone.utc)
     cs_id = await generate_next_cs_claim_id()
 
-    auth_customer_id: Optional[str] = None
-    if authorization and authorization.lower().startswith("bearer "):
-        try:
-            payload = decode_access_token(authorization[7:].strip())
-            auth_customer_id = payload.get("sub")
-        except Exception:
-            pass
-
-    effective_customer_id = request.customer_id or auth_customer_id or "USR-100001"
-    use_cs_id = bool(request.customer_id or auth_customer_id)
-    primary_id = cs_id if use_cs_id else f"DEMO-{uuid4().hex[:8].upper()}"
+    # If authorization header passed, ensure current_user is valid
+    if current_user:
+        effective_customer_id = current_user["sub"]
+        primary_id = cs_id
+    elif is_prod:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required to create an insurance claim in production.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    else:
+        # Development / test mode fallback for unauthenticated Phase 1 tests
+        effective_customer_id = request.customer_id or "USR-100001"
+        primary_id = cs_id if request.customer_id else f"DEMO-{uuid4().hex[:8].upper()}"
 
     record = ClaimRecord(
         id=primary_id,
@@ -164,19 +173,47 @@ async def create_claim(
         updated_at=now,
     )
     await insert_claim(record, conversation_turns=request.conversation_turns)
+    await log_audit_event(
+        user_id=effective_customer_id,
+        action="CLAIM_CREATED",
+        details=f"Claim {record.id} created for policy {request.policy_reference} ({request.vehicle_type})",
+        claim_id=record.id,
+    )
     return ClaimCreateResponse(
         id=record.id,
         claim_id=cs_id,
         status=record.status,
-        message=f"Demo claim {record.id} created successfully. This is a simulated claim – no real insurance claim has been filed.",
+        message=f"Claim {record.id} created successfully. This is a simulated claim – no real insurance claim has been filed.",
         is_demo=True,
     )
 
 
 @router.get("/", response_model=ClaimListResponse)
-async def list_claims(customer_id: Optional[str] = Query(None)):
-    """List claims (optionally filtered by customer_id)."""
-    claims = await get_all_claims(customer_id=customer_id)
+async def list_claims(
+    customer_id: Optional[str] = Query(None),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """
+    List claims scoped strictly to the authenticated customer.
+    Never exposes other customers' claims.
+    """
+    settings = get_settings()
+    is_prod = (settings.app_env or "").lower() == "production"
+
+    if current_user:
+        # Always scope strictly to the verified token identity
+        claims = await get_all_claims(customer_id=current_user["sub"])
+    elif is_prod:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required to list claims.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    else:
+        # Development / test mode: only return anonymous demo claims, never other users' data
+        all_claims = await get_all_claims()
+        claims = [c for c in all_claims if c.id.startswith("DEMO-")]
+
     return ClaimListResponse(
         claims=claims,
         total=len(claims),
@@ -185,9 +222,26 @@ async def list_claims(customer_id: Optional[str] = Query(None)):
 
 
 @router.get("/stats")
-async def claim_stats(customer_id: Optional[str] = Query(None)):
-    """Dashboard statistics."""
-    claims = await get_all_claims(customer_id=customer_id)
+async def claim_stats(
+    customer_id: Optional[str] = Query(None),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """Dashboard statistics strictly scoped to the authenticated customer."""
+    settings = get_settings()
+    is_prod = (settings.app_env or "").lower() == "production"
+
+    if current_user:
+        claims = await get_all_claims(customer_id=current_user["sub"])
+    elif is_prod:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    else:
+        all_claims = await get_all_claims()
+        claims = [c for c in all_claims if c.id.startswith("DEMO-")]
+
     total = len(claims)
     return {
         "total_claims": total,
@@ -199,16 +253,18 @@ async def claim_stats(customer_id: Optional[str] = Query(None)):
 @router.get("/{claim_id}", response_model=ClaimDetailResponse)
 async def get_claim_detail(
     claim_id: str,
-    user_id: str = Depends(get_optional_current_user_id),
+    claim: ClaimRecord = Depends(get_authorized_claim_or_demo),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ):
-    """Retrieve a specific claim with timeline, screened evidence, generated reports, and insurer submissions."""
-    claim = await get_claim(claim_id)
-    if not claim:
-        raise HTTPException(status_code=404, detail=f"Claim {claim_id} not found.")
+    """
+    Retrieve a specific claim.
+    Requires claim ownership verification (cross-customer access returns HTTP 403).
+    """
+    user_id = current_user.get("sub") if current_user else claim.customer_id
     raw_timeline = await get_timeline(claim_id)
     timeline = [
         TimelineEvent(
-            timestamp=datetime.fromisoformat(e["timestamp"]),
+            timestamp=datetime.fromisoformat(e["timestamp"]) if isinstance(e["timestamp"], str) else e["timestamp"],
             title=e["title"],
             description=e["description"],
         )
@@ -217,6 +273,14 @@ async def get_claim_detail(
     evidence = await get_claim_evidence(claim_id, requesting_user_id=user_id)
     reports = await get_claim_reports(claim_id)
     submissions = await get_claim_insurer_submissions(claim_id)
+
+    await log_audit_event(
+        user_id=user_id,
+        action="CLAIM_VIEWED",
+        details=f"Customer accessed claim detail for {claim_id}",
+        claim_id=claim_id,
+    )
+
     return ClaimDetailResponse(
         claim=claim,
         timeline=timeline,
@@ -231,13 +295,14 @@ async def get_claim_detail(
 async def update_claim_details(
     claim_id: str,
     request: ClaimUpdateRequest,
-    user_id: str = Depends(get_optional_current_user_id),
+    claim: ClaimRecord = Depends(get_authorized_claim_or_demo),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ):
-    """Update or confirm claim details during customer review (Step 6 of product flow)."""
-    claim = await get_claim(claim_id)
-    if not claim:
-        raise HTTPException(status_code=404, detail=f"Claim {claim_id} not found.")
-
+    """
+    Update or confirm claim details during customer review (Step 6 of product flow).
+    Strictly verifies that the caller owns the claim.
+    """
+    user_id = current_user.get("sub") if current_user else claim.customer_id
     updates = {k: v for k, v in request.model_dump().items() if v is not None}
     if "customer_confirmation" in updates:
         updates["customer_confirmation"] = int(bool(updates["customer_confirmation"]))
@@ -261,17 +326,22 @@ async def update_claim_details(
 @router.post("/{claim_id}/report")
 async def generate_claim_report_endpoint(
     claim_id: str,
-    user_id: str = Depends(get_optional_current_user_id),
+    claim: ClaimRecord = Depends(get_authorized_claim_or_demo),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ):
     """
     Generate the 9-Section Professional Insurance Claim Dossier, Layer 1 Canonical Schema JSON,
     and binary PDF report (Step 7 of product flow).
+    Enforces claim ownership.
     """
-    claim = await get_claim(claim_id)
-    if not claim:
-        raise HTTPException(status_code=404, detail=f"Claim {claim_id} not found.")
-
+    user_id = current_user.get("sub") if current_user else claim.customer_id
     report_data = await generate_claim_dossier_and_report(claim_id, requesting_user_id=user_id)
+    await log_audit_event(
+        user_id=user_id,
+        claim_id=claim_id,
+        action="REPORT_GENERATED",
+        details=f"Generated dossier report version {report_data.get('version', '1.0')} for claim {claim_id}",
+    )
     return report_data
 
 
@@ -279,13 +349,11 @@ async def generate_claim_report_endpoint(
 async def get_latest_claim_report(
     claim_id: str,
     version: Optional[str] = Query(None),
-    user_id: str = Depends(get_optional_current_user_id),
+    claim: ClaimRecord = Depends(get_authorized_claim_or_demo),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ):
-    """Retrieve the generated 9-Section Dossier & Canonical Schema JSON (generates v1.0 if none exists yet)."""
-    claim = await get_claim(claim_id)
-    if not claim:
-        raise HTTPException(status_code=404, detail=f"Claim {claim_id} not found.")
-
+    """Retrieve the generated 9-Section Dossier & Canonical Schema JSON. Enforces claim ownership."""
+    user_id = current_user.get("sub") if current_user else claim.customer_id
     reports = await get_claim_reports(claim_id)
     if not reports:
         return await generate_claim_dossier_and_report(claim_id, requesting_user_id=user_id)
@@ -301,10 +369,12 @@ async def get_latest_claim_report(
 async def download_claim_report_pdf(
     claim_id: str,
     version: Optional[str] = Query(None),
-    user_id: str = Depends(get_optional_current_user_id),
+    claim: ClaimRecord = Depends(get_authorized_claim_or_demo),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ):
-    """Download the binary PDF report for the 9-Section Professional Insurance Claim Dossier."""
-    report = await get_latest_claim_report(claim_id, version=version, user_id=user_id)
+    """Download the binary PDF report for the 9-Section Dossier. Enforces claim ownership."""
+    user_id = current_user.get("sub") if current_user else claim.customer_id
+    report = await get_latest_claim_report(claim_id, version=version, claim=claim, current_user=current_user)
     pdf_path = Path(report["pdf_storage_path"])
     if pdf_path.exists():
         pdf_bytes = pdf_path.read_bytes()
@@ -314,10 +384,20 @@ async def download_claim_report_pdf(
         pdf_bytes = render_dossier_pdf_bytes(dossier_obj)
 
     filename = f"ClaimSathi_Dossier_{claim_id}_v{report['version']}.pdf"
+    await log_audit_event(
+        user_id=user_id,
+        claim_id=claim_id,
+        action="REPORT_DOWNLOADED",
+        details=f"Downloaded official English PDF dossier report for claim {claim_id}",
+    )
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-cache, no-store, must-revalidate",
+        },
     )
 
 
@@ -327,20 +407,31 @@ async def download_claim_report_localized(
     lang: str = Query("en", description="Preferred report language: en, kn, te, hi, ta"),
     download: bool = Query(False, description="Force attachment download if true"),
     version: Optional[str] = Query(None),
-    user_id: str = Depends(get_optional_current_user_id),
+    claim: ClaimRecord = Depends(get_authorized_claim_or_demo),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ):
     """
-    Render or download the 9-Section Claim Dossier in the customer's preferred language
-    (English, Kannada, Telugu, Hindi, Tamil) with full native Unicode font support.
+    Render or download the 9-Section Claim Dossier in the customer's preferred language.
+    Enforces claim ownership.
     """
-    report = await get_latest_claim_report(claim_id, version=version, user_id=user_id)
+    user_id = current_user.get("sub") if current_user else claim.customer_id
+    report = await get_latest_claim_report(claim_id, version=version, claim=claim, current_user=current_user)
     from ..models import ProfessionalClaimDossier
     dossier_obj = ProfessionalClaimDossier(**report["dossier"])
     html_str = render_localized_dossier_html(dossier_obj, lang=lang)
     code = (lang or "en").split("-")[0].lower()
-    headers = {}
+    headers = {
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, no-cache, no-store, must-revalidate",
+    }
     if download:
         headers["Content-Disposition"] = f'attachment; filename="ClaimSathi_Dossier_{claim_id}_{code.upper()}.html"'
+    await log_audit_event(
+        user_id=user_id,
+        claim_id=claim_id,
+        action="REPORT_DOWNLOADED",
+        details=f"Downloaded localized ({code}) dossier report for claim {claim_id}",
+    )
     return Response(
         content=html_str.encode("utf-8"),
         media_type="text/html; charset=utf-8",
@@ -352,16 +443,28 @@ async def download_claim_report_localized(
 async def download_claim_canonical_json(
     claim_id: str,
     version: Optional[str] = Query(None),
-    user_id: str = Depends(get_optional_current_user_id),
+    claim: ClaimRecord = Depends(get_authorized_claim_or_demo),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ):
-    """Download Layer 1 — ClaimSathi Canonical Schema JSON for the claim."""
-    report = await get_latest_claim_report(claim_id, version=version, user_id=user_id)
+    """Download Layer 1 — ClaimSathi Canonical Schema JSON. Enforces claim ownership."""
+    user_id = current_user.get("sub") if current_user else claim.customer_id
+    report = await get_latest_claim_report(claim_id, version=version, claim=claim, current_user=current_user)
     canonical_bytes = json.dumps(report["canonical_schema"], indent=2).encode("utf-8")
     filename = f"ClaimSathi_Canonical_{claim_id}_v{report['version']}.json"
+    await log_audit_event(
+        user_id=user_id,
+        claim_id=claim_id,
+        action="REPORT_DOWNLOADED",
+        details=f"Downloaded canonical JSON schema for claim {claim_id}",
+    )
     return Response(
         content=canonical_bytes,
         media_type="application/json",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-cache, no-store, must-revalidate",
+        },
     )
 
 
@@ -369,19 +472,23 @@ async def download_claim_canonical_json(
 async def submit_claim_to_mock_insurer(
     claim_id: str,
     request: InsurerSubmissionRequest,
-    user_id: str = Depends(get_optional_current_user_id),
+    claim: ClaimRecord = Depends(get_authorized_claim_or_demo),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ):
     """
     Phase 7 — Simulated Insurer Integration Gateway (Pages 10–11 of PDF).
-    Maps Canonical JSON via Layer 2 Insurer Adapter and returns a simulated insurer acknowledgement.
+    Enforces claim ownership before submission to carrier adapter.
     """
-    claim = await get_claim(claim_id)
-    if not claim:
-        raise HTTPException(status_code=404, detail=f"Claim {claim_id} not found.")
-
+    user_id = current_user.get("sub") if current_user else claim.customer_id
     result = await submit_to_mock_insurer_gateway(
         claim_id=claim_id,
         recipient=request.recipient,
         requesting_user_id=user_id,
+    )
+    await log_audit_event(
+        user_id=user_id,
+        claim_id=claim_id,
+        action="INSURER_SUBMISSION",
+        details=f"Claim {claim_id} submitted to mock insurer {request.recipient} with ref {result.get('insurer_claim_reference')}",
     )
     return result

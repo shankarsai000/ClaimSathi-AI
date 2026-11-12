@@ -63,6 +63,12 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
     ...options,
   })
   if (!resp.ok) {
+    if (resp.status === 401 && !url.includes('/auth/login') && !url.includes('/auth/register')) {
+      clearStoredAuth()
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('claimsathi-session-expired'))
+      }
+    }
     const err = await resp.json().catch(() => ({ detail: resp.statusText }))
     throw new Error(err.detail || `Request failed: ${resp.status}`)
   }
@@ -106,6 +112,16 @@ export const api = {
     request<VaultSummaryResponse>(
       customerId ? `/auth/vault?customer_id=${encodeURIComponent(customerId)}` : '/auth/vault',
     ),
+
+  logout: async (): Promise<void> => {
+    try {
+      await request('/auth/logout', { method: 'POST' })
+    } catch {
+      // Ignore network errors on logout
+    } finally {
+      clearStoredAuth()
+    }
+  },
 
   // ── Phase 2 & 3: Live Gnani Prisma STT & Timbre TTS ──
   transcribeVoice: async (
@@ -230,8 +246,11 @@ export const api = {
   listClaimEvidence: (claimId: string) =>
     request<EvidenceAssetRecord[]>(`/evidence/${encodeURIComponent(claimId)}`),
 
-  getEvidenceFileUrl: (claimId: string, evidenceId: string) =>
-    `${BASE}/evidence/${encodeURIComponent(claimId)}/file/${encodeURIComponent(evidenceId)}`,
+  getEvidenceFileUrl: (claimId: string, evidenceId: string) => {
+    const token = getStoredToken()
+    const tokenParam = token ? `?token=${encodeURIComponent(token)}` : ''
+    return `${BASE}/evidence/${encodeURIComponent(claimId)}/file/${encodeURIComponent(evidenceId)}${tokenParam}`
+  },
 
   // ── Phase 5, 6 & 7: Claims, Confirmation, 9-Section Dossier, PDF & Mock Insurer Gateway ──
   createClaim: (data: ClaimCreateRequest) =>
@@ -254,14 +273,32 @@ export const api = {
   getLatestReport: (claimId: string) =>
     request<ReportRecord>(`/claims/${encodeURIComponent(claimId)}/report`),
 
-  getReportPdfUrl: (claimId: string, version?: string) =>
-    `${BASE}/claims/${encodeURIComponent(claimId)}/report/pdf${version ? `?version=${encodeURIComponent(version)}` : ''}`,
+  getReportPdfUrl: (claimId: string, version?: string) => {
+    const token = getStoredToken()
+    const params = new URLSearchParams()
+    if (version) params.set('version', version)
+    if (token) params.set('token', token)
+    const qs = params.toString()
+    return `${BASE}/claims/${encodeURIComponent(claimId)}/report/pdf${qs ? `?${qs}` : ''}`
+  },
 
-  getReportLocalizedUrl: (claimId: string, lang: string = 'en', download: boolean = false) =>
-    `${BASE}/claims/${encodeURIComponent(claimId)}/report/localized?lang=${encodeURIComponent(lang)}${download ? '&download=true' : ''}`,
+  getReportLocalizedUrl: (claimId: string, lang: string = 'en', download: boolean = false) => {
+    const token = getStoredToken()
+    const params = new URLSearchParams()
+    params.set('lang', lang)
+    if (download) params.set('download', 'true')
+    if (token) params.set('token', token)
+    return `${BASE}/claims/${encodeURIComponent(claimId)}/report/localized?${params.toString()}`
+  },
 
-  getReportJsonUrl: (claimId: string, version?: string) =>
-    `${BASE}/claims/${encodeURIComponent(claimId)}/report/json${version ? `?version=${encodeURIComponent(version)}` : ''}`,
+  getReportJsonUrl: (claimId: string, version?: string) => {
+    const token = getStoredToken()
+    const params = new URLSearchParams()
+    if (version) params.set('version', version)
+    if (token) params.set('token', token)
+    const qs = params.toString()
+    return `${BASE}/claims/${encodeURIComponent(claimId)}/report/json${qs ? `?${qs}` : ''}`
+  },
 
   submitToInsurer: (claimId: string, recipient = 'DEMO_INSURER_A') =>
     request<InsurerSubmissionResponse>(`/claims/${encodeURIComponent(claimId)}/submit-insurer`, {

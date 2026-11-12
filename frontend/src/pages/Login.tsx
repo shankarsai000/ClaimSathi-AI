@@ -92,7 +92,9 @@ export default function Login() {
     try {
       const res = await api.requestOtp(identifier.trim())
       setOtpRequestedMessage(res.message)
-      setOtpCode(res.demo_otp_code || '123456')
+      if (import.meta.env.DEV && res.demo_otp_code) {
+        setOtpCode(res.demo_otp_code)
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to request OTP.')
     } finally {
@@ -168,8 +170,8 @@ export default function Login() {
       </div>
 
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
-        {/* Quick Demo Test Account Selector */}
-        {mode === 'login' && (
+        {/* Quick Demo Test Account Selector (Development/Demo mode only) */}
+        {mode === 'login' && import.meta.env.DEV && (
           <div className="mb-4 bg-white/95 backdrop-blur-md rounded-2xl border border-gray-200/90 p-3.5 shadow-sm">
             <div className="flex items-center gap-1.5 text-[11px] font-bold text-gray-700 mb-2">
               <Sparkles className="w-3.5 h-3.5 text-amber-500" />

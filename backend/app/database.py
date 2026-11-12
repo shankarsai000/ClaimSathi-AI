@@ -17,7 +17,7 @@ Implements the complete 12-table architecture from _ClaimSathi AI product flow.p
 
 import aiosqlite
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Any, Dict, List
 from uuid import uuid4
 from .models import (
@@ -237,9 +237,21 @@ async def init_db():
                 action TEXT NOT NULL,
                 details TEXT NOT NULL,
                 ip_address TEXT DEFAULT '127.0.0.1',
-                timestamp TEXT NOT NULL
+                timestamp TEXT NOT NULL,
+                resource_type TEXT DEFAULT 'claim',
+                resource_id TEXT,
+                outcome TEXT DEFAULT 'SUCCESS'
             )
         """)
+        # Ensure new audit columns exist on existing databases
+        async with db.execute("PRAGMA table_info(audit_logs)") as cur:
+            audit_existing_cols = [row[1] for row in await cur.fetchall()]
+        if "resource_type" not in audit_existing_cols:
+            await db.execute("ALTER TABLE audit_logs ADD COLUMN resource_type TEXT DEFAULT 'claim'")
+        if "resource_id" not in audit_existing_cols:
+            await db.execute("ALTER TABLE audit_logs ADD COLUMN resource_id TEXT")
+        if "outcome" not in audit_existing_cols:
+            await db.execute("ALTER TABLE audit_logs ADD COLUMN outcome TEXT DEFAULT 'SUCCESS'")
 
         # 11. capture_sessions
         await db.execute("""
@@ -498,14 +510,17 @@ async def log_audit_event(
     details: str,
     claim_id: Optional[str] = None,
     ip_address: str = "127.0.0.1",
+    resource_type: Optional[str] = None,
+    resource_id: Optional[str] = None,
+    outcome: str = "SUCCESS",
 ):
     log_id = f"AUD-{uuid4().hex[:8].upper()}"
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            """INSERT INTO audit_logs (log_id, user_id, claim_id, action, details, ip_address, timestamp)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (log_id, user_id, claim_id, action, details, ip_address, now),
+            """INSERT INTO audit_logs (log_id, user_id, claim_id, action, details, ip_address, resource_type, resource_id, outcome, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (log_id, user_id, claim_id, action, details, ip_address, resource_type, resource_id, outcome, now),
         )
         await db.commit()
 
@@ -533,7 +548,7 @@ async def create_user_account(
     consents: UserConsentInput,
 ) -> UserProfile:
     customer_id = await generate_next_customer_id()
-    now_str = datetime.utcnow().isoformat()
+    now_str = datetime.now(timezone.utc).isoformat()
     pw_hash = hash_password(password)
     consent_id = f"CNS-{customer_id.replace('USR-', '')}"
 
@@ -713,7 +728,7 @@ async def insert_claim(
             injuries_reported=claim.injuries_reported,
         )
 
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """INSERT INTO claims
@@ -814,7 +829,7 @@ async def insert_claim(
 
 
 async def add_timeline_event(claim_id: str, title: str, description: str, status: str = "confirmed"):
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """INSERT INTO timeline_events (claim_id, timestamp, title, description)
@@ -832,7 +847,7 @@ async def add_timeline_event(claim_id: str, title: str, description: str, status
 async def update_claim_record(claim_id: str, updates: Dict[str, Any]) -> Optional[ClaimRecord]:
     if not updates:
         return await get_claim(claim_id)
-    updates["updated_at"] = datetime.utcnow().isoformat()
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
     set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
     values = list(updates.values()) + [claim_id]
     async with aiosqlite.connect(DB_PATH) as db:
@@ -1062,7 +1077,7 @@ async def get_claim_evidence(claim_id: str, requesting_user_id: Optional[str] = 
 # ── Live Camera Capture Sessions ───────────────────────
 async def create_capture_session(user_id: str, claim_id: Optional[str], instructions: list[str]) -> Dict[str, Any]:
     session_id = f"CAP-2026-{uuid4().hex[:6].upper()}"
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """INSERT INTO capture_sessions (session_id, claim_id, user_id, instructions_json, status, created_at)
@@ -1075,6 +1090,9 @@ async def create_capture_session(user_id: str, claim_id: Optional[str], instruct
         claim_id=claim_id,
         action="LIVE_CAPTURE_SESSION_STARTED",
         details=f"Guided live capture session {session_id} started with {len(instructions)} instructions.",
+        resource_type="capture_session",
+        resource_id=session_id,
+        outcome="SUCCESS",
     )
     return {
         "session_id": session_id,
@@ -1102,7 +1120,7 @@ async def save_generated_report(
     canonical_dict: Dict[str, Any],
     pdf_storage_path: str,
 ) -> Dict[str, Any]:
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """INSERT INTO reports (report_id, claim_id, user_id, version, dossier_json, canonical_json, pdf_storage_path, generated_at)
@@ -1178,7 +1196,7 @@ async def save_insurer_submission(
     processing_status: str,
     pipeline_steps: List[Dict[str, str]],
 ) -> Dict[str, Any]:
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """INSERT OR REPLACE INTO insurer_submissions

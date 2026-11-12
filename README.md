@@ -4,6 +4,8 @@
 > Powered by **Gnani AI Speech APIs** (Prisma STT + Timbre TTS), **Multi-Stage Cryptographic Evidence Screening** (C2PA Content Credentials, Google SynthID, SHA-256, 64-bit DCT pHash), **Supabase PostgreSQL & Cloud Storage**, and **Dynamic Multi-Language 9-Section Dossier Generation**.
 
 > 📄 **[Read our 1-Page Solution Pitch (`SOLUTION_PITCH.md`)](./SOLUTION_PITCH.md)** *(Prepared for The Great Indian Internship Challenge Submission)*  
+> 🔒 **[Sprint 1 Security Architecture (`SECURITY_ARCHITECTURE.md`)](./docs/SECURITY_ARCHITECTURE.md)**  
+> 🛡️ **[Sprint 1 Security Audit & Remediation (`SPRINT_1_SECURITY_AUDIT.md`)](./docs/SPRINT_1_SECURITY_AUDIT.md)**  
 > 🔑 **[View Pre-Seeded Test Customer Accounts (`USER_ACCOUNTS.md`)](./USER_ACCOUNTS.md)**  
 > 🖼️ **[View Real Accident Evidence Samples (`test_evidence_samples/`)](./test_evidence_samples/README.md)**
 
@@ -245,26 +247,37 @@ npm run dev
 
 ## 9. Automated Verification & Test Suite
 
-ClaimSathi AI includes 25 automated pytest suites covering the entire 7-phase product lifecycle:
+ClaimSathi AI includes **41 automated pytest suites** covering the entire 7-phase product lifecycle and Sprint 1 security & data isolation matrix:
 
 ```powershell
 cd "d:\ClaimSathi AI\backend"
-python -m pytest -v
+python -m pytest backend/tests -v
 ```
 
-### Verified Test Matrix:
-- `test_master_01_customer_registration_login_and_vault`: Authentication, session validation, and vault querying.
-- `test_master_02_and_03_conversation_extraction_and_missing_followup`: Multilingual intake, extraction, and sticky follow-up loops.
-- `test_master_04_05_06_evidence_integrity_exact_and_resized_duplicates`: Magic bytes, SHA-256 duplicate, and pHash screening.
-- `test_master_07_and_08_ai_provenance_c2pa_synthid_and_inconclusive_rules`: C2PA and SynthID synthetic provenance detection.
-- `test_master_09_10_11_12_live_capture_dossier_pdf_and_mock_insurer_gateway`: Live camera ingestion, 9-section PDF rendering, canonical JSON export, and mock insurer gateway submission.
-- `test_telugu_voice_conversational_acceptance`: End-to-end Telugu voice conversational acceptance.
+### Verified Test Matrix (41 Passed):
+- `test_acceptance.py`: End-to-end Hinglish and Telugu voice conversational acceptance workflows.
+- `test_claims.py`: Health check, mock transcription, claim creation, validation, retrieval, and listing.
+- `test_master_flow.py`: Registration, customer vault summary, multilingual extraction, sticky follow-ups, duplicate screening (SHA-256 and 64-bit DCT pHash), C2PA / SynthID synthetic provenance rules, guided live capture, 9-section PDF rendering, canonical schema JSON export, and mock insurer gateway submission.
+- `test_security_sprint1.py` (16 New Security Suites):
+  - Missing, invalid, expired, and tampered JWT rejection (HTTP 401).
+  - Production startup rejection on missing/insecure JWT secrets.
+  - OTP single-use consumption and universal code (`123456`) production blocking.
+  - Multi-tenant customer claim isolation: Customer B receives HTTP 403 on Customer A's claim across read, update, capture, upload, list, download, report, and insurer submission.
+  - Zero-overlap claim isolation in customer dashboard lists.
+  - Tamper-proof customer identity (query string and body `customer_id` spoofing ignored).
+  - Evidence upload MIME / magic byte signature validation (fake `.exe` and fake `.png` rejected with HTTP 400).
+  - Path traversal attack prevention (`../` sequences safely blocked).
+  - Structured audit trail verification with zero credential leaks.
+- `test_voice.py`: Gnani Prisma STT (v2.5, v3.0), audio duration limits, unsupported audio formats, credit exhaustion handling, Timbre TTS synthesis, and API key protection.
 
 ---
 
 ## 10. Security, Privacy & IRDAI Regulatory Alignment
 
-- **Zero Credential Exposure**: Gnani API keys and Supabase connection strings are securely encapsulated in the FastAPI backend and never forwarded to client browsers.
+- **Zero-Trust Customer Data Isolation**: User identity is derived strictly from verified JWT signatures (`sub` claim). Claim ownership is validated on every single operation. Cross-customer access attempts return **HTTP 403 Forbidden** and trigger an audit alert.
+- **PostgreSQL Row-Level Security (RLS)**: 17 active RLS policies with `FORCE ROW LEVEL SECURITY` guarantee database-enforced multi-tenant isolation even in direct query contexts.
+- **Append-Only Security Audit Trail**: Access, modification, and authorization events are immutably logged with `resource_type`, `resource_id`, and `outcome`. No `UPDATE` or `DELETE` operations are permitted on audit records.
+- **Zero Credential Exposure**: Gnani API keys, Supabase credentials, and database connection strings are encapsulated in the backend and never exposed to the frontend or git.
 - **Explicit Customer Consents**: Registration enforces 3 mandatory checkboxes aligning with the Digital Personal Data Protection (DPDP) Act:
   1. AI voice/text processing for claim intake.
   2. Cryptographic screening (C2PA, SynthID, SHA-256, pHash).
