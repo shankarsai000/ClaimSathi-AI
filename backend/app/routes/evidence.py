@@ -21,6 +21,7 @@ from ..auth import get_optional_user, verify_media_ticket
 from ..authorization import get_authorized_claim_or_demo
 from ..database import (
     DB_PATH,
+    get_db_connection,
     get_claim,
     create_capture_session,
     get_capture_session,
@@ -190,7 +191,7 @@ async def upload_and_screen_evidence(
 
     # Bind unbound session permanently to this claim on first upload
     if capture_session_id and not session.get("claim_id"):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with get_db_connection() as db:
             await db.execute(
                 "UPDATE capture_sessions SET claim_id = ? WHERE session_id = ?",
                 (claim_id, capture_session_id),
@@ -280,8 +281,7 @@ async def serve_evidence_media_file(
         else:
             user_id = claim.customer_id
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db_connection() as db:
         cursor = await db.execute(
             "SELECT storage_path, detected_mime, original_filename FROM evidence_assets WHERE claim_id = ? AND evidence_id = ?",
             (claim_id, evidence_id),

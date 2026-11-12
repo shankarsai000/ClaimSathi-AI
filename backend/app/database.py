@@ -15,10 +15,15 @@ Implements the complete 12-table architecture from _ClaimSathi AI product flow.p
 12. insurer_submissions   — Mock Insurer Integration Gateway records
 """
 
+import os
 import aiosqlite
+import sqlite3
+import hashlib
 import json
+from pathlib import Path
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Optional, Any, Dict, List
+from typing import Optional, Any, Dict, List, Tuple, AsyncIterator
 from uuid import uuid4
 from .models import (
     ClaimRecord,
@@ -31,80 +36,268 @@ from .models import (
 )
 from .auth import hash_password
 
-DB_PATH = "claimsathi.db"
+# Canonical base directory and default database path
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+DEFAULT_DB_PATH = str(BASE_DIR / "claimsathi.db")
+
+
+def get_db_path() -> str:
+    """Returns canonical SQLite database path from env or defaults to repository root claimsathi.db."""
+    return os.environ.get("CLAIMSATHI_DB_PATH", DEFAULT_DB_PATH)
+
+
+DB_PATH = get_db_path()
+
+
+@asynccontextmanager
+async def get_db_connection(db_path: Optional[str] = None) -> AsyncIterator[aiosqlite.Connection]:
+    """
+    Asynchronous SQLite connection context manager enforcing:
+    1. PRAGMA foreign_keys = ON;
+    2. PRAGMA journal_mode = WAL;
+    3. PRAGMA busy_timeout = 5000;
+    4. aiosqlite.Row factory for named and positional index access.
+    """
+    path = db_path or get_db_path()
+    if path != ":memory:":
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    async with aiosqlite.connect(path) as db:
+        await db.execute("PRAGMA foreign_keys = ON;")
+        await db.execute("PRAGMA busy_timeout = 5000;")
+        if path != ":memory:":
+            try:
+                await db.execute("PRAGMA journal_mode = WAL;")
+            except Exception:
+                pass
+        db.row_factory = aiosqlite.Row
+        yield db
+
+
+async def connect_db(db_path: Optional[str] = None) -> aiosqlite.Connection:
+    """Connects to SQLite with standard PRAGMAs configured."""
+    path = db_path or get_db_path()
+    if path != ":memory:":
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    db = await aiosqlite.connect(path)
+    await db.execute("PRAGMA foreign_keys = ON;")
+    await db.execute("PRAGMA busy_timeout = 5000;")
+    if path != ":memory:":
+        try:
+            await db.execute("PRAGMA journal_mode = WAL;")
+        except Exception:
+            pass
+    db.row_factory = aiosqlite.Row
+    return db
+
+
+async def apply_sqlite_migrations(db: aiosqlite.Connection) -> List[str]:
+    """
+    Applies any pending SQL migrations from backend/migrations/sqlite/ in alphabetical/version order.
+    Returns list of newly applied migration names.
+    """
+    applied = []
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            applied_at TEXT NOT NULL,
+            checksum TEXT NOT NULL
+        )
+    """)
+    await db.commit()
+
+    migrations_dir = BASE_DIR / "backend" / "migrations" / "sqlite"
+    if not migrations_dir.exists():
+        migrations_dir = BASE_DIR / "migrations" / "sqlite"
+
+    if migrations_dir.exists():
+        cur = await db.execute("SELECT version FROM schema_migrations")
+        applied_versions = {row[0] for row in await cur.fetchall()}
+
+        sql_files = sorted(migrations_dir.glob("*.sql"))
+        for sql_file in sql_files:
+            prefix = sql_file.name.split("_")[0]
+            try:
+                version_num = int(prefix)
+            except ValueError:
+                continue
+
+            if version_num not in applied_versions:
+                content = sql_file.read_text(encoding="utf-8")
+                checksum = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                await db.executescript(content)
+                now_str = datetime.now(timezone.utc).isoformat()
+                await db.execute(
+                    "INSERT INTO schema_migrations (version, name, applied_at, checksum) VALUES (?, ?, ?, ?)",
+                    (version_num, sql_file.name, now_str, checksum),
+                )
+                await db.commit()
+                applied.append(sql_file.name)
+
+    return applied
+
+
+async def verify_sqlite_foreign_keys(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Runs PRAGMA foreign_key_check and returns any violations found."""
+    violations = []
+    async with get_db_connection(db_path) as db:
+        cursor = await db.execute("PRAGMA foreign_key_check;")
+        rows = await cursor.fetchall()
+        for r in rows:
+            violations.append({
+                "table": r[0],
+                "rowid": r[1],
+                "parent_table": r[2],
+                "fkid": r[3],
+            })
+    return violations
+
+
+async def get_schema_migration_history(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Retrieves applied schema migrations from schema_migrations table."""
+    async with get_db_connection(db_path) as db:
+        cursor = await db.execute("SELECT version, name, applied_at, checksum FROM schema_migrations ORDER BY version ASC")
+        rows = await cursor.fetchall()
+        return [
+            {
+                "version": r[0],
+                "name": r[1],
+                "applied_at": r[2],
+                "checksum": r[3],
+            }
+            for r in rows
+        ]
+
+
+def create_sqlite_backup(src_db_path: Optional[str] = None, backup_dir: Optional[str] = None) -> str:
+    """
+    Creates an online, non-blocking backup of the SQLite database using sqlite3.backup.
+    Returns the absolute path to the generated backup database file.
+    """
+    source_path = src_db_path or get_db_path()
+    if not os.path.exists(source_path):
+        raise FileNotFoundError(f"Source database not found: {source_path}")
+
+    out_dir = Path(backup_dir) if backup_dir else Path(source_path).parent / "backups"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    backup_file = out_dir / f"claimsathi_backup_{timestamp}.db"
+
+    src_conn = sqlite3.connect(source_path)
+    dst_conn = sqlite3.connect(str(backup_file))
+    try:
+        src_conn.backup(dst_conn, pages=100)
+    finally:
+        dst_conn.close()
+        src_conn.close()
+
+    return str(backup_file.resolve())
+
+
+def restore_sqlite_backup(backup_file_path: str, target_db_path: Optional[str] = None) -> bool:
+    """
+    Restores the SQLite database from a verified backup file using sqlite3.backup.
+    Validates backup integrity before overwriting target database.
+    """
+    if not os.path.exists(backup_file_path):
+        raise FileNotFoundError(f"Backup file not found: {backup_file_path}")
+
+    test_conn = sqlite3.connect(backup_file_path)
+    try:
+        cur = test_conn.cursor()
+        cur.execute("PRAGMA integrity_check;")
+        res = cur.fetchone()
+        if not res or res[0] != "ok":
+            raise ValueError(f"Backup integrity check failed: {res}")
+    finally:
+        test_conn.close()
+
+    target_path = target_db_path or get_db_path()
+    os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
+
+    src_conn = sqlite3.connect(backup_file_path)
+    dst_conn = sqlite3.connect(target_path)
+    try:
+        src_conn.backup(dst_conn, pages=100)
+    finally:
+        dst_conn.close()
+        src_conn.close()
+
+    return True
+
+
+async def delete_claim_record(claim_id: str) -> bool:
+    """
+    Deletes a claim and all associated child entities transactionally.
+    Preserves audit_logs for compliance and forensic auditing.
+    """
+    async with get_db_connection() as db:
+        cur = await db.execute("SELECT id FROM claims WHERE id = ?", (claim_id,))
+        if not await cur.fetchone():
+            return False
+
+        # Query file paths to clean up local storage files if any
+        storage_paths = []
+        cur_ev = await db.execute("SELECT storage_path FROM evidence_assets WHERE claim_id = ?", (claim_id,))
+        for row in await cur_ev.fetchall():
+            if row[0]:
+                storage_paths.append(row[0])
+        cur_rep = await db.execute("SELECT pdf_storage_path FROM reports WHERE claim_id = ?", (claim_id,))
+        for row in await cur_rep.fetchall():
+            if row[0]:
+                storage_paths.append(row[0])
+
+        await db.execute("BEGIN IMMEDIATE;")
+        try:
+            # 1. evidence_checks
+            await db.execute("""
+                DELETE FROM evidence_checks WHERE claim_id = ? OR evidence_id IN (
+                    SELECT evidence_id FROM evidence_assets WHERE claim_id = ?
+                )
+            """, (claim_id, claim_id))
+            # 2. evidence_assets
+            await db.execute("DELETE FROM evidence_assets WHERE claim_id = ?", (claim_id,))
+            # 3. claim_fields
+            await db.execute("DELETE FROM claim_fields WHERE claim_id = ?", (claim_id,))
+            # 4. reports
+            await db.execute("DELETE FROM reports WHERE claim_id = ?", (claim_id,))
+            # 5. claim_status_events
+            await db.execute("DELETE FROM claim_status_events WHERE claim_id = ?", (claim_id,))
+            # 6. timeline_events
+            await db.execute("DELETE FROM timeline_events WHERE claim_id = ?", (claim_id,))
+            # 7. insurer_submissions
+            await db.execute("DELETE FROM insurer_submissions WHERE claim_id = ?", (claim_id,))
+            # 8. capture_sessions
+            await db.execute("DELETE FROM capture_sessions WHERE claim_id = ?", (claim_id,))
+            # 9. conversations
+            await db.execute("DELETE FROM conversations WHERE claim_id = ?", (claim_id,))
+            # 10. claims
+            await db.execute("DELETE FROM claims WHERE id = ?", (claim_id,))
+
+            await db.commit()
+        except Exception:
+            await db.execute("ROLLBACK;")
+            raise
+
+        # Clean up disk files
+        for p in storage_paths:
+            try:
+                if p and os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+
+        return True
 
 
 async def init_db():
-    """Initialize all 12 tables, migrate any legacy schema columns, and seed Rahul's account (USR-100001)."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        # 1. users
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                customer_id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                email TEXT UNIQUE NOT NULL,
-                phone TEXT NOT NULL,
-                password_hash TEXT NOT NULL,
-                declared_insurer TEXT DEFAULT 'Bharat General Insurance',
-                created_at TEXT NOT NULL
-            )
-        """)
+    """Initialize all 12 tables via migrations, verify legacy schema columns, and seed accounts."""
+    async with get_db_connection() as db:
+        # 1. Apply versioned schema migrations
+        await apply_sqlite_migrations(db)
 
-        # 2. user_consents
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS user_consents (
-                consent_id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                data_processing_consent INTEGER DEFAULT 1,
-                evidence_screening_consent INTEGER DEFAULT 1,
-                retention_policy_acknowledged INTEGER DEFAULT 1,
-                consented_at TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(customer_id)
-            )
-        """)
-
-        # 3. conversations
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS conversations (
-                conversation_id TEXT PRIMARY KEY,
-                claim_id TEXT,
-                user_id TEXT NOT NULL,
-                language TEXT DEFAULT 'indic-auto',
-                turns_json TEXT DEFAULT '[]',
-                transcript_full TEXT DEFAULT '',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-        """)
-
-        # 4. claims
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS claims (
-                id TEXT PRIMARY KEY,
-                customer_id TEXT DEFAULT 'USR-100001',
-                insurance_type TEXT DEFAULT 'motor',
-                policy_reference TEXT NOT NULL,
-                insurer_name TEXT DEFAULT 'Bharat General Insurance',
-                policy_type TEXT DEFAULT 'Comprehensive Motor Policy',
-                incident_location TEXT NOT NULL,
-                incident_date TEXT NOT NULL,
-                vehicle_type TEXT NOT NULL,
-                damage_description TEXT NOT NULL,
-                people_involved TEXT DEFAULT 'Policyholder (Driver)',
-                injuries_reported TEXT DEFAULT 'No physical injuries reported',
-                detailed_statement TEXT DEFAULT '',
-                transcript TEXT DEFAULT '',
-                status TEXT DEFAULT 'confirmed',
-                customer_confirmation INTEGER DEFAULT 1,
-                report_status TEXT DEFAULT 'not_generated',
-                insurer_submission_status TEXT DEFAULT 'not_submitted',
-                is_demo INTEGER DEFAULT 1,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-        """)
-
-        # Safely migrate older claims table if missing new columns
+        # 2. Legacy fallback checks (for pre-existing databases)
         cursor = await db.execute("PRAGMA table_info(claims)")
         existing_cols = {row[1] for row in await cursor.fetchall()}
         migrations = [
@@ -123,127 +316,6 @@ async def init_db():
             if col_name not in existing_cols:
                 await db.execute(f"ALTER TABLE claims ADD COLUMN {col_name} {col_def}")
 
-        # 5. claim_fields
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS claim_fields (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                claim_id TEXT NOT NULL,
-                field_name TEXT NOT NULL,
-                label TEXT NOT NULL,
-                value TEXT,
-                confidence TEXT DEFAULT 'high',
-                is_edited INTEGER DEFAULT 0,
-                is_verified INTEGER DEFAULT 0,
-                follow_up_question TEXT,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY (claim_id) REFERENCES claims(id)
-            )
-        """)
-
-        # 6. evidence_assets
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS evidence_assets (
-                evidence_id TEXT PRIMARY KEY,
-                claim_id TEXT NOT NULL,
-                user_id TEXT NOT NULL,
-                label TEXT NOT NULL,
-                media_type TEXT NOT NULL,
-                capture_method TEXT NOT NULL,
-                capture_session_id TEXT,
-                original_filename TEXT NOT NULL,
-                detected_mime TEXT NOT NULL,
-                file_size_bytes INTEGER NOT NULL,
-                storage_path TEXT NOT NULL,
-                width INTEGER,
-                height INTEGER,
-                exif_metadata_json TEXT DEFAULT '{}',
-                upload_timestamp TEXT NOT NULL,
-                FOREIGN KEY (claim_id) REFERENCES claims(id)
-            )
-        """)
-
-        # 7. evidence_checks (Cross-claim fingerprint index & provenance results)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS evidence_checks (
-                check_id TEXT PRIMARY KEY,
-                evidence_id TEXT NOT NULL,
-                claim_id TEXT NOT NULL,
-                sha256_hash TEXT NOT NULL,
-                perceptual_hash TEXT,
-                magic_bytes_valid INTEGER DEFAULT 1,
-                detected_format TEXT DEFAULT 'unknown',
-                malware_scan_status TEXT DEFAULT 'clean',
-                c2pa_found INTEGER DEFAULT 0,
-                synthid_found INTEGER DEFAULT 0,
-                provenance_result TEXT NOT NULL,
-                provenance_system_response TEXT NOT NULL,
-                provenance_details_json TEXT DEFAULT '{}',
-                duplicate_status TEXT DEFAULT 'unique',
-                duplicate_match_type TEXT,
-                matched_claim_id TEXT,
-                matched_evidence_id TEXT,
-                hamming_distance INTEGER,
-                requires_human_review INTEGER DEFAULT 0,
-                screening_outcome_label TEXT DEFAULT '',
-                checked_at TEXT NOT NULL,
-                FOREIGN KEY (evidence_id) REFERENCES evidence_assets(evidence_id)
-            )
-        """)
-
-        # 8. reports
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS reports (
-                report_id TEXT PRIMARY KEY,
-                claim_id TEXT NOT NULL,
-                user_id TEXT NOT NULL,
-                version TEXT NOT NULL,
-                dossier_json TEXT NOT NULL,
-                canonical_json TEXT NOT NULL,
-                pdf_storage_path TEXT NOT NULL,
-                generated_at TEXT NOT NULL,
-                FOREIGN KEY (claim_id) REFERENCES claims(id)
-            )
-        """)
-
-        # 9. claim_status_events & legacy timeline_events
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS claim_status_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                claim_id TEXT NOT NULL,
-                status TEXT NOT NULL,
-                title TEXT NOT NULL,
-                description TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                FOREIGN KEY (claim_id) REFERENCES claims(id)
-            )
-        """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS timeline_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                claim_id TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                title TEXT NOT NULL,
-                description TEXT NOT NULL,
-                FOREIGN KEY (claim_id) REFERENCES claims(id)
-            )
-        """)
-
-        # 10. audit_logs
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS audit_logs (
-                log_id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                claim_id TEXT,
-                action TEXT NOT NULL,
-                details TEXT NOT NULL,
-                ip_address TEXT DEFAULT '127.0.0.1',
-                timestamp TEXT NOT NULL,
-                resource_type TEXT DEFAULT 'claim',
-                resource_id TEXT,
-                outcome TEXT DEFAULT 'SUCCESS'
-            )
-        """)
-        # Ensure new audit columns exist on existing databases
         async with db.execute("PRAGMA table_info(audit_logs)") as cur:
             audit_existing_cols = [row[1] for row in await cur.fetchall()]
         if "resource_type" not in audit_existing_cols:
@@ -253,37 +325,8 @@ async def init_db():
         if "outcome" not in audit_existing_cols:
             await db.execute("ALTER TABLE audit_logs ADD COLUMN outcome TEXT DEFAULT 'SUCCESS'")
 
-        # 11. capture_sessions
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS capture_sessions (
-                session_id TEXT PRIMARY KEY,
-                claim_id TEXT,
-                user_id TEXT NOT NULL,
-                instructions_json TEXT NOT NULL,
-                status TEXT DEFAULT 'active',
-                created_at TEXT NOT NULL,
-                completed_at TEXT
-            )
-        """)
-
-        # 12. insurer_submissions
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS insurer_submissions (
-                submission_id TEXT PRIMARY KEY,
-                claim_id TEXT NOT NULL,
-                recipient TEXT NOT NULL,
-                recipient_display_name TEXT NOT NULL,
-                adapter_payload_json TEXT NOT NULL,
-                delivery_status TEXT NOT NULL,
-                insurer_claim_reference TEXT NOT NULL,
-                processing_status TEXT NOT NULL,
-                pipeline_steps_json TEXT DEFAULT '[]',
-                submitted_at TEXT NOT NULL,
-                FOREIGN KEY (claim_id) REFERENCES claims(id)
-            )
-        """)
-
         # Seed 4 Indian Customer Accounts in database tables (USR-100001 to USR-100004)
+
         seed_users = [
             (
                 "USR-100001",
@@ -516,7 +559,7 @@ async def log_audit_event(
 ):
     log_id = f"AUD-{uuid4().hex[:8].upper()}"
     now = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await db.execute(
             """INSERT INTO audit_logs (log_id, user_id, claim_id, action, details, ip_address, resource_type, resource_id, outcome, timestamp)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -527,7 +570,7 @@ async def log_audit_event(
 
 # ── User & Auth Persistence ────────────────────────────
 async def generate_next_customer_id() -> str:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         cursor = await db.execute("SELECT COUNT(*) FROM users")
         count = (await cursor.fetchone())[0]
         next_num = 100001 + count
@@ -552,7 +595,7 @@ async def create_user_account(
     pw_hash = hash_password(password)
     consent_id = f"CNS-{customer_id.replace('USR-', '')}"
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await db.execute(
             """INSERT INTO users (customer_id, name, email, phone, password_hash, declared_insurer, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
@@ -583,7 +626,7 @@ async def create_user_account(
 
 async def get_user_by_identifier(identifier: str) -> Optional[Dict[str, Any]]:
     clean = identifier.strip()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             """SELECT * FROM users
@@ -595,7 +638,7 @@ async def get_user_by_identifier(identifier: str) -> Optional[Dict[str, Any]]:
 
 
 async def get_user_profile(customer_id: str) -> Optional[UserProfile]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("SELECT * FROM users WHERE customer_id = ?", (customer_id,))
         user_row = await cursor.fetchone()
@@ -635,7 +678,7 @@ async def get_user_profile(customer_id: str) -> Optional[UserProfile]:
 # ── Claim ID Generation & Persistence ──────────────────
 async def generate_next_cs_claim_id() -> str:
     """Generate official ClaimSathi ID format: CS-2026-000124, CS-2026-000125, etc."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         cursor = await db.execute("SELECT id FROM claims WHERE id LIKE 'CS-2026-%'")
         rows = await cursor.fetchall()
         max_num = 123
@@ -729,7 +772,7 @@ async def insert_claim(
         )
 
     now = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await db.execute(
             """INSERT INTO claims
                (id, customer_id, insurance_type, policy_reference, insurer_name, policy_type,
@@ -830,7 +873,7 @@ async def insert_claim(
 
 async def add_timeline_event(claim_id: str, title: str, description: str, status: str = "confirmed"):
     now = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await db.execute(
             """INSERT INTO timeline_events (claim_id, timestamp, title, description)
                VALUES (?, ?, ?, ?)""",
@@ -850,14 +893,14 @@ async def update_claim_record(claim_id: str, updates: Dict[str, Any]) -> Optiona
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
     set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
     values = list(updates.values()) + [claim_id]
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await db.execute(f"UPDATE claims SET {set_clause} WHERE id = ?", values)
         await db.commit()
     return await get_claim(claim_id)
 
 
 async def get_claim(claim_id: str) -> Optional[ClaimRecord]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("SELECT * FROM claims WHERE id = ?", (claim_id,))
         row = await cursor.fetchone()
@@ -868,7 +911,7 @@ async def get_claim(claim_id: str) -> Optional[ClaimRecord]:
 
 
 async def get_all_claims(customer_id: Optional[str] = None) -> list[ClaimRecord]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         db.row_factory = aiosqlite.Row
         if customer_id:
             cursor = await db.execute(
@@ -886,7 +929,7 @@ async def get_all_claims(customer_id: Optional[str] = None) -> list[ClaimRecord]
 
 
 async def get_timeline(claim_id: str) -> list[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM timeline_events WHERE claim_id = ? ORDER BY id ASC",
@@ -906,7 +949,7 @@ async def get_timeline(claim_id: str) -> list[dict]:
 # ── Evidence & Cross-Claim Fingerprint Persistence ─────
 async def get_all_evidence_fingerprints() -> List[Dict[str, Any]]:
     """Retrieve all stored SHA-256 and perceptual hashes across all claims for duplicate detection."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             """SELECT c.check_id, c.evidence_id, c.claim_id, c.sha256_hash, c.perceptual_hash,
@@ -920,7 +963,7 @@ async def get_all_evidence_fingerprints() -> List[Dict[str, Any]]:
 
 
 async def count_claim_media_items(claim_id: str, media_type: str) -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         cursor = await db.execute(
             "SELECT COUNT(*) FROM evidence_assets WHERE claim_id = ? AND media_type = ?",
             (claim_id, media_type),
@@ -933,7 +976,7 @@ async def insert_evidence_asset_and_check(
     storage_path: str,
     raw_matched_claim_id: Optional[str] = None,
 ):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await db.execute(
             """INSERT INTO evidence_assets
                (evidence_id, claim_id, user_id, label, media_type, capture_method,
@@ -996,7 +1039,7 @@ async def insert_evidence_asset_and_check(
 
 
 async def get_claim_evidence(claim_id: str, requesting_user_id: Optional[str] = None) -> List[EvidenceAssetRecord]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             """SELECT a.*, c.check_id, c.sha256_hash, c.perceptual_hash, c.magic_bytes_valid,
@@ -1078,7 +1121,7 @@ async def get_claim_evidence(claim_id: str, requesting_user_id: Optional[str] = 
 async def create_capture_session(user_id: str, claim_id: Optional[str], instructions: list[str]) -> Dict[str, Any]:
     session_id = f"CAP-2026-{uuid4().hex[:6].upper()}"
     now = datetime.now(timezone.utc)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await db.execute(
             """INSERT INTO capture_sessions (session_id, claim_id, user_id, instructions_json, status, created_at)
                VALUES (?, ?, ?, ?, 'active', ?)""",
@@ -1103,7 +1146,7 @@ async def create_capture_session(user_id: str, claim_id: Optional[str], instruct
 
 
 async def get_capture_session(session_id: str) -> Optional[Dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("SELECT * FROM capture_sessions WHERE session_id = ?", (session_id,))
         row = await cursor.fetchone()
@@ -1113,7 +1156,7 @@ async def get_capture_session(session_id: str) -> Optional[Dict[str, Any]]:
 async def mark_capture_session_completed(session_id: str, claim_id: Optional[str] = None) -> None:
     """Mark a live capture session as completed and permanently bind it to the claim."""
     now = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         if claim_id:
             await db.execute(
                 "UPDATE capture_sessions SET status = 'completed', completed_at = ?, claim_id = COALESCE(claim_id, ?) WHERE session_id = ?",
@@ -1138,7 +1181,7 @@ async def save_generated_report(
     pdf_storage_path: str,
 ) -> Dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await db.execute(
             """INSERT INTO reports (report_id, claim_id, user_id, version, dossier_json, canonical_json, pdf_storage_path, generated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -1171,7 +1214,7 @@ async def save_generated_report(
 
 
 async def get_claim_reports(claim_id: str) -> List[Dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM reports WHERE claim_id = ? ORDER BY generated_at DESC",
@@ -1196,7 +1239,7 @@ async def get_claim_reports(claim_id: str) -> List[Dict[str, Any]]:
 
 
 async def get_total_insurer_submissions_count() -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         cursor = await db.execute("SELECT COUNT(*) FROM insurer_submissions")
         row = await cursor.fetchone()
         return row[0] if row else 0
@@ -1214,7 +1257,7 @@ async def save_insurer_submission(
     pipeline_steps: List[Dict[str, str]],
 ) -> Dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         await db.execute(
             """INSERT OR REPLACE INTO insurer_submissions
                (submission_id, claim_id, recipient, recipient_display_name, adapter_payload_json,
@@ -1254,7 +1297,7 @@ async def save_insurer_submission(
 
 
 async def get_claim_insurer_submissions(claim_id: str) -> List[Dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM insurer_submissions WHERE claim_id = ? ORDER BY submitted_at DESC",
@@ -1280,7 +1323,7 @@ async def get_claim_insurer_submissions(claim_id: str) -> List[Dict[str, Any]]:
 
 
 async def get_user_audit_logs(user_id: str, limit: int = 25) -> List[Dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with get_db_connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM audit_logs WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?",

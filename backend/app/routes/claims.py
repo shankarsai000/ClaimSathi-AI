@@ -44,6 +44,7 @@ from ..database import (
     get_claim_insurer_submissions,
     add_timeline_event,
     log_audit_event,
+    delete_claim_record,
 )
 from ..dossier_engine import (
     generate_claim_dossier_and_report,
@@ -326,6 +327,39 @@ async def update_claim_details(
         details=f"Customer updated fields: {', '.join(updates.keys())}",
     )
     return updated
+
+
+@router.delete("/{claim_id}")
+async def delete_claim_endpoint(
+    claim_id: str,
+    claim: ClaimRecord = Depends(get_authorized_claim_or_demo),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """
+    Sprint 1.2: Secure Claim Deletion Endpoint.
+    Strictly verifies ownership via get_authorized_claim_or_demo (403 for unauthorized users).
+    Cascades deletion to claim_fields, evidence_assets, evidence_checks, reports, timeline_events, insurer_submissions.
+    Preserves audit_logs for immutable compliance history.
+    """
+    user_id = current_user.get("sub") if current_user else claim.customer_id
+    success = await delete_claim_record(claim_id)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Claim '{claim_id}' not found.")
+
+    await log_audit_event(
+        user_id=user_id,
+        claim_id=claim_id,
+        action="CLAIM_DELETED",
+        details=f"Customer {user_id} deleted claim {claim_id} and all cascaded evidence and reports.",
+        resource_type="claim",
+        resource_id=claim_id,
+        outcome="SUCCESS",
+    )
+    return {
+        "status": "success",
+        "message": f"Claim {claim_id} and all associated records have been permanently deleted.",
+        "claim_id": claim_id,
+    }
 
 
 @router.post("/{claim_id}/report")
