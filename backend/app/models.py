@@ -397,6 +397,12 @@ class ClaimCreateRequest(BaseModel):
     injuries_reported: Optional[str] = "No physical injuries reported"
     detailed_statement: Optional[str] = None
     conversation_turns: Optional[list[dict[str, Any]]] = None
+    evidence_id: Optional[str] = None
+    claimed_vehicle_type: Optional[str] = "four_wheeler"
+    verification_decision: Optional[str] = None
+    spoof_risk: Optional[float] = None
+    total_estimated_inr: Optional[int] = None
+    cost_estimate: Optional[dict[str, Any]] = None
 
 
 class ClaimUpdateRequest(BaseModel):
@@ -411,6 +417,12 @@ class ClaimUpdateRequest(BaseModel):
     injuries_reported: Optional[str] = None
     detailed_statement: Optional[str] = None
     customer_confirmation: Optional[bool] = None
+    evidence_id: Optional[str] = None
+    claimed_vehicle_type: Optional[str] = None
+    verification_decision: Optional[str] = None
+    spoof_risk: Optional[float] = None
+    total_estimated_inr: Optional[int] = None
+    cost_estimate: Optional[dict[str, Any]] = None
 
 
 class ClaimCreateResponse(BaseModel):
@@ -489,3 +501,77 @@ class VoiceTranscribeResponse(BaseModel):
     assistant_dialogue: Optional[str] = None
     assistant_speech_text: Optional[str] = None
     assistant_language: Optional[str] = None
+    claimed_vehicle_type: Optional[str] = None
+    vehicle_registration: Optional[str] = None
+    damage_keywords: list[str] = Field(default_factory=list)
+    incident_description: Optional[str] = None
+
+
+class EvidenceNarrationRequest(BaseModel):
+    """Request model for multimodal evidence narration."""
+    decision: str
+    claimed_vehicle_type: str = "four_wheeler"
+    detected_vehicle_category: Optional[str] = None
+    vehicle_category_mismatch: bool = False
+    total_estimated_inr: float = 0.0
+    damages: list[Any] = Field(default_factory=list)
+    language: Optional[str] = "hi-IN"
+
+
+class EvidenceNarrationResponse(BaseModel):
+    """Response model for multimodal evidence narration."""
+    spoken_narration: str
+    narration_text: str
+    language: str
+    decision: str
+    total_estimated_inr: float
+
+
+class ExtractSlotsRequest(BaseModel):
+    """Request model for code-mixed multi-slot claim extraction."""
+    text: str = Field(..., min_length=1, max_length=3000)
+    language: Optional[str] = "indic-auto"
+
+
+class ExtractSlotsResponse(BaseModel):
+    """Response model for code-mixed multi-slot extraction and concise voice reply."""
+    transcript: str
+    claimed_vehicle_type: Optional[str] = None
+    vehicle_registration: Optional[str] = None
+    damage_keywords: list[str] = Field(default_factory=list)
+    incident_description: str
+    detected_language: str
+    reply_text: str
+    fields: list[ClaimField] = Field(default_factory=list)
+    missing_fields: list[str] = Field(default_factory=list)
+    assistant_dialogue: str
+    assistant_speech_text: str
+    assistant_language: str
+
+
+class ConverseTurnRequest(BaseModel):
+    """Stateful multi-turn conversational intake request."""
+    message: str = Field(..., min_length=1, max_length=4000)
+    language: Optional[str] = "indic-auto"
+    known_fields: dict[str, Optional[str]] = Field(default_factory=dict)
+    history: list[dict[str, str]] = Field(default_factory=list)
+    expected_field: Optional[str] = None
+
+
+class ConverseTurnResponse(BaseModel):
+    """Stateful multi-turn conversational intake response."""
+    transcript: str
+    detected_language: str
+    assistant_language: str
+    reply_text: str
+    assistant_dialogue: str
+    assistant_speech_text: str
+    fields: list[ClaimField] = Field(default_factory=list)
+    missing_fields: list[str] = Field(default_factory=list)
+    known_fields: dict[str, Optional[str]] = Field(default_factory=dict)
+    newly_captured: dict[str, str] = Field(default_factory=dict)
+    claimed_vehicle_type: Optional[str] = None
+    vehicle_registration: Optional[str] = None
+    damage_keywords: list[str] = Field(default_factory=list)
+    incident_description: Optional[str] = None
+    is_complete: bool = False

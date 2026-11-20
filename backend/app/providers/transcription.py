@@ -253,66 +253,66 @@ class MockTranscriptionProvider(TranscriptionProvider):
         return extract_claim_fields(transcript)
 
 
-# ── Multilingual Field Questions (Per-Language + Bilingual Display) ─────────
+# ── Multilingual Field Questions (Per-Language + Clean Natural Phrasing) ─────────
 FIELD_QUESTIONS = {
     "policy_reference": {
         "label": "Policy / Vehicle Number",
-        "question": "Aapka policy ya gaadi number kya hai? / మీ పాలసీ లేదా వాహన నంబర్ చెప్పండి. (What is your policy or vehicle number?)",
+        "question": "Could you share your vehicle registration number or insurance policy number?",
         "by_lang": {
-            "te-IN": "మీ పాలసీ నంబర్ లేదా వాహన రిజిస్ట్రేషన్ నంబర్ (ఉదా: TS-09-EA-4590) చెప్పండి.",
-            "kn-IN": "ದಯವಿಟ್ಟು ನಿಮ್ಮ ಪಾಲಿಸಿ ನಂಬರ್ ಅಥವಾ ವಾಹನದ ನೋಂದಣಿ ಸಂಖ್ಯೆ (ಉదా: KA-17-EA-4590) ಹೇಳಿ.",
-            "hi-IN": "कृपया अपना पॉलिसी नंबर या गाड़ी का रजिस्ट्रेशन नंबर बताएं।",
-            "ta-IN": "தயவுசெய்து உங்கள் பாலிசி எண் அல்லது வாகனப் பதிவு எண்ணைச் சொல்லுங்கள்.",
-            "mr-IN": "कृपया तुमचा पॉलिसी नंबर किंवा वाहन नोंदणी क्रमांक सांगा.",
-            "en-IN": "What is your Policy Number or Vehicle Registration Number (e.g. KA-17-EA-4590)?",
+            "te-IN": "మీ వాహన రిజిస్ట్రేషన్ నంబర్ లేదా పాలసీ నంబర్ చెప్పండి.",
+            "kn-IN": "ದಯವಿಟ್ಟು ನಿಮ್ಮ ವಾಹನದ ನೋಂದಣಿ ಸಂಖ್ಯೆ ಅಥವಾ ಪಾಲಿಸಿ ನಂಬರ್ ತಿಳಿಸಿ.",
+            "hi-IN": "कृपया अपनी गाड़ी का नंबर या पॉलिसी नंबर बताएं।",
+            "ta-IN": "தயவுசெய்து உங்கள் வாகனப் பதிவு எண் அல்லது பாலிசி எண்ணைச் சொல்லுங்கள்.",
+            "mr-IN": "कृपया तुमच्या वाहनाचा नोंदणी क्रमांक किंवा पॉलिसी नंबर सांगा.",
+            "en-IN": "Could you share your vehicle registration number or policy number?",
         },
     },
     "incident_location": {
         "label": "Incident Location",
-        "question": "Accident kahan hua tha? / యాక్సిడెంట్ ఎక్కడ జరిగింది? (Where did the accident happen?)",
+        "question": "Where did the accident happen?",
         "by_lang": {
             "te-IN": "యాక్సిడెంట్ ఏ ప్రాంతంలో లేదా నగరంలో జరిగింది?",
             "kn-IN": "ಅಪಘಾತ ಯಾವ ಸ್ಥಳದಲ್ಲಿ ಅಥವಾ ನಗರದಲ್ಲಿ ನಡೆಯಿತು?",
             "hi-IN": "हादसा किस जगह या शहर में हुआ था?",
             "ta-IN": "விபத்து எந்த இடத்தில் அல்லது நகரத்தில் நடந்தது?",
             "mr-IN": "अपघात कोणत्या ठिकाणी किंवा शहरात झाला?",
-            "en-IN": "Where did the accident take place? Please state the location or city.",
+            "en-IN": "Where did the accident take place? Please share the area or city.",
         },
     },
     "incident_date": {
         "label": "Incident Date",
-        "question": "Accident kab hua? Date bataiye. / ఎప్పుడు యాక్సిడెంట్ అయింది? తేదీ చెప్పండి. (When did the accident happen?)",
+        "question": "When did the accident happen?",
         "by_lang": {
             "te-IN": "యాక్సిడెంట్ ఏ రోజు లేదా ఏ సమయానికి జరిగింది? తేదీ లేదా సమయం చెప్పండి.",
             "kn-IN": "ಅಪಘಾತ ಯಾವ ದಿನ ಅಥವಾ ಯಾವ ಸಮಯಕ್ಕೆ ನಡೆಯಿತು? ದಿನಾಂಕ ಅಥವಾ ಸಮಯ ಹೇಳಿ.",
             "hi-IN": "हादसा कब हुआ था? कृपया तारीख या समय बताएं।",
             "ta-IN": "விபத்து எப்போது நடந்தது? தேதி அல்லது நேரத்தைச் சொல்லுங்கள்.",
             "mr-IN": "अपघात कधी झाला? कृपया तारीख किंवा वेळ सांगा.",
-            "en-IN": "When did this accident happen? Please state the date or time.",
+            "en-IN": "When did this accident happen? Please mention the date or time.",
         },
     },
     "vehicle_type": {
         "label": "Vehicle Type",
-        "question": "Aapki gaadi ka type kya hai – car, bike, auto? / మీ వెహికల్ టైప్ ఏంటి? (What type of vehicle?)",
+        "question": "What type of vehicle was involved (car, bike, scooter, auto)?",
         "by_lang": {
             "te-IN": "మీ వాహనం రకం ఏంటి - కార్, బైక్ లేదా ఇతర వాహనమా?",
             "kn-IN": "ನಿಮ್ಮ ವಾಹನದ ಪ್ರಕಾರ ಯಾವುದು - ಕಾರ್, ಬೈಕ್ ಅಥವಾ ಇತರ ವಾಹನವೇ?",
-            "hi-IN": "आपकी गाड़ी का प्रकार क्या है - कार, बाइक या अन्य?",
+            "hi-IN": "आपकी गाड़ी का प्रकार क्या है - कार, बाइक या कोई अन्य वाहन?",
             "ta-IN": "உங்கள் வாகனத்தின் வகை என்ன - கார், பைக் அல்லது மற்றதா?",
             "mr-IN": "तुमच्या वाहनाचा प्रकार कोणता आहे - कार, बाईक की इतर?",
-            "en-IN": "What type of vehicle was involved (car, bike, auto, truck)?",
+            "en-IN": "What type of vehicle was involved (car, bike, scooter, auto, or truck)?",
         },
     },
     "damage_description": {
         "label": "Damage Description",
-        "question": "Gaadi mein kya damage hua hai? / వెహికల్ కి ఎలాంటి డ్యామేజ్ అయింది? (Describe the damage.)",
+        "question": "What damage happened to your vehicle?",
         "by_lang": {
             "te-IN": "వాహనానికి ఎలాంటి నష్టం లేదా డ్యామేజ్ జరిగింది?",
             "kn-IN": "ವಾಹನಕ್ಕೆ ಯಾವ ರೀತಿಯ ಹಾನಿ ಅಥವಾ ಡ್ಯಾಮೇಜ್ ಆಗಿದೆ?",
             "hi-IN": "गाड़ी में क्या नुकसान हुआ है? कृपया बताएं।",
             "ta-IN": "வாகனத்திற்கு என்ன சேதம் ஏற்பட்டுள்ளது?",
             "mr-IN": "वाहनाचे काय नुकसान झाले आहे? कृपया सांगा.",
-            "en-IN": "Please describe the damage to your vehicle.",
+            "en-IN": "Please describe what parts of your vehicle were damaged.",
         },
     },
 }
@@ -538,7 +538,10 @@ def parse_indic_phonetic_policy(text: str, require_keyword: bool = True) -> Opti
     policy_kws = [
         "పాలసీ", "పాలిసీ", "పాలసి", "पॉलिसी", "पालिसी", "ಪಾಲಿಸಿ", "பாலிசி", "policy",
         "బండి నంబర్", "కారు నంబర్", "వెహికల్ నంబర్", "గాడి నంబర్", "ಗಾಡಿ ನಂಬರ್", "ವಾಹನ ಸಂಖ್ಯೆ", "ಗಾಡಿ ಸಂಖ್ಯೆ",
-        "गाड़ी नंबर", "वाहन नंबर", "vehicle number", "registration number", "gaadi number",
+        "गाड़ी नंबर", "वाहन नंबर", "बाइक नंबर", "कार नंबर",
+        "vehicle number", "vehicle no", "registration number", "registration no", "reg no",
+        "bike number", "bike no", "car number", "car no", "scooter number", "scooter no",
+        "gaadi number", "gaadi no", "number plate", "plate number",
     ]
     has_policy_kw = any(k in text.lower() for k in policy_kws)
     if require_keyword and not has_policy_kw:
@@ -546,7 +549,7 @@ def parse_indic_phonetic_policy(text: str, require_keyword: bool = True) -> Opti
 
     if has_policy_kw:
         m = re.search(
-            r"(?:పాలసీ|పాలిసీ|పాలసి|पॉलिसी|पालिसी|ಪಾಲಿಸಿ|பாலிசி|policy|వెహికల్|గాడి|బండి|ಗಾಡಿ|ವಾಹನ|गाड़ी|vehicle|registration)\s*(?:నంబర్|నెంబర్|నెం|नंबर|ನಂಬರ್|ಸಂಖ್ಯೆ|எண்|number|no\.?|reference|is|hai|అనేది)?\s*[:\-]?\s*([^\.\n।]+)",
+            r"(?:పాలసీ|పాలిసీ|పాలసి|पॉलिसी|पालिसी|ಪಾಲಿಸಿ|பாலிசி|policy|వెహికల్|గాడి|బండి|ಗಾಡಿ|ವಾಹನ|गाड़ी|बाइक|कार|vehicle|bike|car|scooter|registration|reg|number\s*plate|plate)\s*(?:నంబర్|నెంబర్|నెం|नंबर|ನಂಬರ್|ಸಂಖ್ಯೆ|எண்|number|no\.?|reference|plate|is|hai|అనేది)?\s*(?:is|hai)?\s*[:\-]?\s*([^\.\n।]+)",
             text,
             re.IGNORECASE,
         )
@@ -685,11 +688,51 @@ def parse_indic_phonetic_policy(text: str, require_keyword: bool = True) -> Opti
             grouped.append(t)
     flush_buffers()
 
+    # Expand spoken 'double X' / 'triple X' digit groups (e.g. 'double four' -> '44')
+    word_digits = {
+        "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
+        "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+    }
+    for w, d in word_digits.items():
+        seg = re.sub(rf"\bdouble\s+{w}\b", f" {d}{d} ", seg, flags=re.IGNORECASE)
+        seg = re.sub(rf"\btriple\s+{w}\b", f" {d}{d}{d} ", seg, flags=re.IGNORECASE)
+
     if grouped and len(grouped) >= 2 and any(any(c.isdigit() for c in g) for g in grouped):
         return "-".join(grouped)
     if len(grouped) == 1 and len(grouped[0]) >= 5 and any(c.isdigit() for c in grouped[0]):
         return grouped[0]
 
+    return None
+
+
+INDIAN_STATE_CODES = {
+    "AN", "AP", "AR", "AS", "BR", "CG", "CH", "DD", "DL", "DN", "GA", "GJ",
+    "HP", "HR", "JH", "JK", "KA", "KL", "LA", "LD", "MH", "ML", "MN", "MP",
+    "MZ", "NL", "OD", "OR", "PB", "PY", "RJ", "SK", "TN", "TR", "TS", "UK",
+    "UP", "WB",
+}
+
+
+def _extract_universal_indian_registration(text: str) -> Optional[str]:
+    """
+    Extract any Indian vehicle registration number across all states/UTs
+    (with spaces, hyphens, dots, or compact form: e.g. 'KA 17 EA 4021', 'KL07AB1234', 'KA 05 1234').
+    """
+    pattern = re.compile(
+        r"\b([A-Za-z]{2})[\s\-\.]?(\d{1,2})[\s\-\.]?([A-Za-z]{0,3})[\s\-\.]?(\d{3,4})\b"
+    )
+    for m in pattern.finditer(text or ""):
+        st = m.group(1).upper()
+        rto = m.group(2)
+        series = m.group(3).upper()
+        num = m.group(4)
+        # Accept if valid Indian state code OR contains series letters (e.g., DL-3C-AS-1111)
+        if st in INDIAN_STATE_CODES or (series and st not in {"AM", "PM", "ON", "AT", "IN", "TO", "BY", "NO", "OF"}):
+            parts = [st, rto.zfill(2)]
+            if series:
+                parts.append(series)
+            parts.append(num)
+            return "-".join(parts)
     return None
 
 
@@ -709,34 +752,40 @@ def extract_claim_fields(transcript: str) -> Tuple[list[ClaimField], list[str]]:
         r"\b((?=[A-Za-z0-9\-]*\d)(?=[A-Za-z0-9\-]*[A-Za-z])[A-Za-z0-9]{2,5}(?:-[A-Za-z0-9]{1,6}){1,4})\b",
         text,
     )
+    universal_plate = _extract_universal_indian_registration(text)
     if policy_pattern:
         fields_dict["policy_reference"] = (
             policy_pattern.group(1).strip().upper(),
             FieldConfidence.HIGH,
         )
+    elif universal_plate:
+        fields_dict["policy_reference"] = (
+            universal_plate,
+            FieldConfidence.HIGH,
+        )
     else:
         indic_policy = parse_indic_phonetic_policy(text, require_keyword=True)
         if not indic_policy:
-            # Also check if state code or policy prefix appears even without the word "policy"
-            if re.search(r"(?:MOT|POL|CS|KA|TS|AP|MH|DL|TN|ఎంఓటీ|ఎం ఓ టీ|ಕೆ ಎ|కె ఎ|టీ ఎస్|ಟಿ ಎಸ್)", text, re.IGNORECASE):
+            state_regex = "|".join(sorted(INDIAN_STATE_CODES | {"MOT", "POL", "CS"}))
+            if re.search(rf"(?:\b(?:{state_regex})\b|ఎంఓటీ|ఎం ఓ టీ|ಕೆ ಎ|కె ఎ|టీ ఎస్|ಟಿ ಎಸ್)", text, re.IGNORECASE):
                 indic_policy = parse_indic_phonetic_policy(text, require_keyword=False)
         if indic_policy:
             fields_dict["policy_reference"] = (indic_policy, FieldConfidence.HIGH)
         else:
             policy_explicit = re.search(
-                r"(?:policy|పాలసీ|పాలిసీ|पॉलिसी|ಪಾಲಿಸಿ|பாலிசி)\s*(?:number|no\.?|reference|నంబర్|నెంబర్|नंबर)?\s*(?:hai|is)?\s*[:\-]?\s*([A-Za-z0-9\-]{4,})",
+                r"(?:policy|bike|car|scooter|vehicle|registration|reg|gaadi|పాలసీ|పాలిసీ|पॉलिसी|ಪಾಲಿಸಿ|பாலிசி)\s*(?:number|no\.?|reference|plate|నంబర్|నెంబర్|नंबर)?\s*(?:is|hai)?\s*[:\-]?\s*([A-Za-z0-9\-]{4,})",
                 text,
                 re.IGNORECASE,
             )
-            if policy_explicit:
+            if policy_explicit and any(c.isdigit() for c in policy_explicit.group(1)):
                 fields_dict["policy_reference"] = (
                     policy_explicit.group(1).strip().upper(),
                     FieldConfidence.HIGH,
                 )
-            elif any(k in text_lower for k in ["policy", "పాలసీ", "పాలిసీ", "पॉलिसी", "ಪಾಲಿಸಿ", "பாலிசி"]):
+            elif any(k in text_lower for k in ["policy", "bike number", "car number", "vehicle number", "registration", "పాలసీ", "పాలిసీ", "पॉलिसी", "ಪಾಲಿಸಿ", "பாலிசி"]):
                 num_fallback = re.search(r"\b(\d{4,10})\b", text)
                 if num_fallback:
-                    fields_dict["policy_reference"] = (f"POL-{num_fallback.group(1)}", FieldConfidence.HIGH)
+                    fields_dict["policy_reference"] = (f"VEH-{num_fallback.group(1)}" if "policy" not in text_lower else f"POL-{num_fallback.group(1)}", FieldConfidence.HIGH)
                 else:
                     fields_dict["policy_reference"] = (None, FieldConfidence.LOW)
             else:
@@ -744,37 +793,39 @@ def extract_claim_fields(transcript: str) -> Tuple[list[ClaimField], list[str]]:
 
     # ── 2. Vehicle Type (Always English: 'car', 'bike', 'truck', 'auto_rickshaw', 'bus') ──
     possessive_match = re.search(
-        r"(?:meri|apni|mera|apna|my|naa|na|maa|nanna|en|ennoda|माझी|माझा|मेरी|मेरा|अपनी|మా|నా|ನನ್ನ|என்)\s+"
-        r"(bike|motorcycle|scooter|scooty|activa|two\s*wheeler|bullet|pulsar|"
-        r"car|gaadi|gadi|kaar|kar|sedan|suv|"
+        r"(?:meri|apni|mera|apna|my|riding|on my|on a|naa|na|maa|nanna|en|ennoda|माझी|माझा|मेरी|मेरा|अपनी|మా|నా|ನನ್ನ|என்)\s+"
+        r"(bike|motorcycle|scooter|scooty|activa|dio|jupiter|pulsar|splendor|apache|bullet|enfield|two\s*wheeler|two_wheeler|"
+        r"car|gaadi|gadi|kaar|kar|sedan|suv|hatchback|swift|baleno|creta|nexon|innova|four\s*wheeler|four_wheeler|"
         r"truck|lorry|auto|rickshaw|"
         r"కార్|కారు|బైక్|బైకు|బండి|స్కూటర్|స్కూటీ|యాక్టివా|ఆటో|లారీ|"
         r"ಕಾರು|ಕಾರ್|ಬೈಕ್|ಗಾಡಿ|ಸ್ಕೂಟರ್|ಆಟೋ|"
-        r"कार|गाड़ी|बाइक|स्कूटर|ऑटो|ट्रक|"
+        r"कार|गाड़ी|बाइक|स्कूटर|स्कूटी|ऑटो|ट्रक|"
         r"கார்|பைக்|வண்டி|ஆட்டோ)",
         text_lower,
     )
     if possessive_match:
         v = possessive_match.group(1).strip()
-        if any(b in v for b in ["bike", "motorcycle", "scooter", "scooty", "activa", "wheeler", "bullet", "pulsar", "బైక్", "బైకు", "స్కూటర్", "స్కూటీ", "యాక్టివా", "ಬೈಕ್", "ಸ್ಕೂಟರ್", "बाइक", "स्कूटर", "பைக்"]):
+        if any(b in v for b in ["bike", "motorcycle", "scooter", "scooty", "activa", "dio", "jupiter", "pulsar", "splendor", "apache", "bullet", "enfield", "two", "బైక్", "బైకు", "స్కూటర్", "స్కూటీ", "యాక్టివా", "ಬೈಕ್", "ಸ್ಕೂಟರ್", "बाइक", "स्कूटर", "स्कूटी", "பைக்"]):
             fields_dict["vehicle_type"] = ("bike", FieldConfidence.HIGH)
-        elif any(c in v for c in ["car", "gaadi", "gadi", "kaar", "kar", "sedan", "suv", "కార్", "కారు", "బండి", "ಕಾರು", "ಕಾರ್", "ಗಾಡಿ", "कार", "गाड़ी", "கார்", "வண்டி"]):
+        elif any(c in v for c in ["car", "gaadi", "gadi", "kaar", "kar", "sedan", "suv", "hatchback", "swift", "baleno", "creta", "nexon", "innova", "four", "కార్", "కారు", "బండి", "ಕಾರು", "ಕಾರ್", "ಗಾಡಿ", "कार", "गाड़ी", "கார்", "வண்டி"]):
             fields_dict["vehicle_type"] = ("car", FieldConfidence.HIGH)
         elif any(t in v for t in ["truck", "lorry", "లారీ", "ट्रक"]):
             fields_dict["vehicle_type"] = ("truck", FieldConfidence.HIGH)
         elif any(a in v for a in ["auto", "rickshaw", "ఆటో", "ಆಟೋ", "ऑटो", "ஆட்டோ"]):
             fields_dict["vehicle_type"] = ("auto_rickshaw", FieldConfidence.HIGH)
     elif any(k in text_lower for k in [
-        "car", "motor car", "sedan", "suv", "hatchback",
+        "bike", "motorcycle", "scooter", "scooty", "activa", "dio", "jupiter", "pulsar", "splendor", "apache", "bullet",
+        "two wheeler", "two-wheeler", "two_wheeler", "2 wheeler", "2w",
+        "బైక్", "బైకు", "మోటార్ సైకిల్", "స్కూటర్", "స్కూటీ", "యాక్టివా", "బండి",
+        "बाइक", "स्कूटर", "स्कूटी", "मोटरसाइकिल", "ಬೈಕ್", "ಸ್ಕೂಟರ್", "பைக்", "ஸ்கூட்டர்",
+    ]):
+        fields_dict["vehicle_type"] = ("bike", FieldConfidence.HIGH)
+    elif any(k in text_lower for k in [
+        "car", "motor car", "sedan", "suv", "hatchback", "swift", "baleno", "creta", "nexon", "innova",
+        "four wheeler", "four-wheeler", "four_wheeler", "4w",
         "కార్", "కారు", "మోటార్ కారు", "कार", "गाड़ी", "ಕಾರು", "ಕಾರ್", "கார்",
     ]):
         fields_dict["vehicle_type"] = ("car", FieldConfidence.HIGH)
-    elif any(k in text_lower for k in [
-        "bike", "motorcycle", "scooter", "scooty", "activa", "two wheeler", "two-wheeler", "2 wheeler",
-        "బైక్", "బైకు", "మోటార్ సైకిల్", "స్కూటర్", "స్కూటీ", "యాక్టివా", "బండి",
-        "बाइक", "स्कूटर", "मोटरसाइकिल", "ಬೈಕ್", "ಸ್ಕೂಟರ್", "பைக்", "ஸ்கூட்டர்",
-    ]):
-        fields_dict["vehicle_type"] = ("bike", FieldConfidence.HIGH)
     elif any(k in text_lower for k in ["gaadi", "gadi", "గాడి", "గాడీ", "ಗಾಡಿ", "वंडी", "வண்டி"]):
         fields_dict["vehicle_type"] = ("car", FieldConfidence.HIGH)
     elif any(k in text_lower for k in ["truck", "lorry", "లారీ", "ట్రక్", "ట్రక్కు", "ट्रक", "ಲಾರಿ", "லாரி"]):
@@ -987,26 +1038,72 @@ def extract_claim_fields(transcript: str) -> Tuple[list[ClaimField], list[str]]:
     else:
         loc_re = re.search(
             r"(?:in|at|near|on|లో|దగ్గర|వద్ద|ನಲ್ಲಿ|ಹತ್ತಿರ|में|के पास|இல்|அருகில்)?\s*"
-            r"([\w\s\u0C00-\u0C7F\u0C80-\u0CFF\u0900-\u097F\u0B80-\u0BFF]{3,30}?)\s+"
-            r"(?:mein|me|road pe|ke paas|near|lo|deggara|daggara|దగ్గర|వద్ద|లో|రోడ్డుపై|ನಲ್ಲಿ|ಹತ್ತಿರ|में|के पास|இல்|அருகில்)\b",
+            r"([\w\s\u0C00-\u0C7F\u0C80-\u0CFF\u0900-\u097F\u0B80-\u0BFF]{3,35}?)\s+"
+            r"(?:mein|me|road pe|ke paas|lo|deggara|daggara|దగ్గర|వద్ద|లో|రోడ్డుపై|ನಲ್ಲಿ|ಹತ್ತಿರ|में|के पास|இல்|அருகில்)\b",
             text,
             re.IGNORECASE,
         )
+        eng_prep_loc = re.search(
+            r"\b(?:near|outside|opposite|around|towards|at|in)\s+"
+            r"([A-Za-z][A-Za-z0-9\s\-]{2,40}?)"
+            r"(?=\s*(?:,|;|\.|yesterday|today|tomorrow|last\b|this\b|on\s+\d|around\s+\d|at\s+\d|and\s+(?:my|the|a|an|broke|damaged|hit)|when|while|$))",
+            text,
+            re.IGNORECASE,
+        )
+        non_places = {
+            "side", "front", "back", "car", "bike", "scooter", "evening", "morning",
+            "afternoon", "night", "accident", "damage", "repair", "time", "date",
+            "today", "yesterday", "tomorrow", "today morning", "today evening",
+            "yesterday morning", "yesterday evening", "last night", "this morning",
+            "the evening", "the morning", "the afternoon", "india",
+            "సైడ్", "మధ్య", "కారు", "కార్", "బైక్",
+        }
+        months_set = {
+            "january", "february", "march", "april", "may", "june", "july",
+            "august", "september", "october", "november", "december",
+            "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+        }
+        chosen_loc = None
         if loc_re:
             candidate = loc_re.group(1).strip()
             for prefix in ["నేను ", "మేము ", "నిన్న ", "ఈరోజు ", "nenu ", "main ", "i was ", "ನಾನು ", "ನಿನ್ನೆ "]:
                 if candidate.lower().startswith(prefix.lower()):
                     candidate = candidate[len(prefix):].strip()
-            non_places = {"సైడ్", "side", "మధ్య", "front", "back", "కారు", "కార్", "బైక్", "car", "bike"}
-            if len(candidate) > 2 and candidate.lower() not in non_places:
-                eng_loc = transliterate_indic_to_english(candidate)
-                fields_dict["incident_location"] = (eng_loc, FieldConfidence.HIGH)
-            else:
-                fields_dict["incident_location"] = (None, FieldConfidence.MISSING)
-        else:
-            fields_dict["incident_location"] = (None, FieldConfidence.MISSING)
+            if len(candidate) > 2 and candidate.lower() not in non_places and candidate.lower() not in months_set:
+                chosen_loc = transliterate_indic_to_english(candidate)
+        if not chosen_loc and eng_prep_loc:
+            cand = re.sub(r"^(?:the|a|an)\s+", "", eng_prep_loc.group(1).strip(), flags=re.IGNORECASE)
+            if len(cand) > 2 and cand.lower() not in non_places and cand.lower() not in months_set and not re.match(r"^\d+", cand):
+                chosen_loc = cand.title()
+        fields_dict["incident_location"] = (
+            (chosen_loc, FieldConfidence.HIGH) if chosen_loc else (None, FieldConfidence.MISSING)
+        )
 
     # ── 4. Incident Date & Time (Always English) ──
+    month_pattern = (
+        r"(?:january|february|march|april|may|june|july|august|september|october|november|december|"
+        r"jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)"
+    )
+    month_date_re = re.search(
+        rf"\b(?:(\d{{1,2}})(?:st|nd|rd|th)?\s+(?:of\s+)?({month_pattern})(?:\s*,?\s*(\d{{4}}))?|({month_pattern})\s+(\d{{1,2}})(?:st|nd|rd|th)?(?:\s*,?\s*(\d{{4}}))?)\b",
+        text,
+        re.IGNORECASE,
+    )
+    rel_days_ago_re = re.search(
+        r"\b(\d+|one|two|three|four|five|six|seven|an|a)\s+(day|days|hour|hours|minute|minutes|week|weeks)\s+ago\b",
+        text_lower,
+    )
+    weekday_re = re.search(
+        r"\b(?:last\s+|this\s+|on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+        text_lower,
+    )
+    date_re = re.search(r"\b(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})\b", text)
+    time_re = re.search(
+        r"\b(\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.|గంటలకు|గంటలకి|బజే|baje|o'clock))\b",
+        text,
+        re.IGNORECASE,
+    )
+
     if any(k in text_lower for k in [
         "ninna evening", "ninna sayantram", "నిన్న సాయంత్రం", "నిన్న సాయంత్రము", "నిన్న సాయంకాలం", "నిన్న ఈవినింగ్",
         "kal shaam", "कल शाम", "ನಿನ್ನೆ ಸಂಜೆ", "ninne sanje", "நேற்று மாலை", "काल संध्याकाळी", "yesterday evening",
@@ -1021,11 +1118,31 @@ def extract_claim_fields(transcript: str) -> Tuple[list[ClaimField], list[str]]:
     ]):
         fields_dict["incident_date"] = ("Yesterday Morning", FieldConfidence.HIGH)
     elif any(k in text_lower for k in [
-        "ninna night", "నిన్న రాత్రి", "kal raat", "कल रात", "ನಿನ್ನೆ ರಾತ್ರಿ", "நேற்று இரவு", "yesterday night",
+        "ninna night", "నిన్న రాత్రి", "kal raat", "कल रात", "ನಿನ್ನೆ ರಾತ್ರಿ", "நேற்று இரவு", "yesterday night", "last night",
     ]):
         fields_dict["incident_date"] = ("Yesterday Night", FieldConfidence.HIGH)
-    elif any(k in text_lower for k in ["kal", "कल", "yesterday", "ninna", "నిన్న", "మొన్న", "ನಿನ್ನೆ", "ninne", "நேற்று", "netru", "काल"]):
-        fields_dict["incident_date"] = ("Yesterday", FieldConfidence.HIGH)
+    elif any(k in text_lower for k in ["day before yesterday", "parso", "परसों", "monna", "మొన్న", "ಮೊನ್ನೆ"]):
+        fields_dict["incident_date"] = ("Day Before Yesterday", FieldConfidence.HIGH)
+    elif month_date_re:
+        extracted_m_date = month_date_re.group(0).strip()
+        if time_re:
+            t_clean = re.sub(r"(?:గంటలకు|గంటలకి|బజే|baje)", "PM", time_re.group(1))
+            fields_dict["incident_date"] = (f"{extracted_m_date} {t_clean}", FieldConfidence.HIGH)
+        else:
+            fields_dict["incident_date"] = (extracted_m_date, FieldConfidence.HIGH)
+    elif rel_days_ago_re:
+        fields_dict["incident_date"] = (rel_days_ago_re.group(0).strip().capitalize(), FieldConfidence.HIGH)
+    elif date_re and time_re:
+        t_clean = re.sub(r"(?:గంటలకు|గంటలకి|బజే|baje)", "PM", time_re.group(1))
+        fields_dict["incident_date"] = (f"{date_re.group(1)} {t_clean}", FieldConfidence.HIGH)
+    elif date_re:
+        fields_dict["incident_date"] = (date_re.group(1), FieldConfidence.HIGH)
+    elif any(k in text_lower for k in ["kal", "कल", "yesterday", "ninna", "నిన్న", "ನಿನ್ನೆ", "ninne", "நேற்று", "netru", "काल"]):
+        if time_re:
+            t_clean = re.sub(r"(?:గంటలకు|గంటలకి|బజే|baje)", "PM", time_re.group(1))
+            fields_dict["incident_date"] = (f"Yesterday {t_clean}", FieldConfidence.HIGH)
+        else:
+            fields_dict["incident_date"] = ("Yesterday", FieldConfidence.HIGH)
     elif any(k in text_lower for k in [
         "aaj subah", "आज सुबह", "today morning", "this morning", "ee roju udayam", "ఈ రోజు ఉదయం", "ఈరోజు ఉదయం", "ఈరోజు పొద్దున్న",
         "ಇವತ್ತು ಬೆಳಿಗ್ಗೆ", "ಇಂದು ಬೆಳಿಗ್ಗೆ", "இன்று காலை", "आज सकाळी",
@@ -1035,8 +1152,16 @@ def extract_claim_fields(transcript: str) -> Tuple[list[ClaimField], list[str]]:
         "aaj shaam", "आज शाम", "today evening", "this evening", "ఈ రోజు సాయంత్రం", "ఈరోజు సాయంత్రం", "ಇವತ್ತು ಸಂಜೆ", "இன்று மாலை",
     ]):
         fields_dict["incident_date"] = ("Today Evening", FieldConfidence.HIGH)
-    elif any(k in text_lower for k in ["aaj", "आज", "today", "ee roju", "eeraju", "eeroju", "ఈ రోజు", "ఈరోజు", "ఇవాళ", "ಇವತ್ತು", "ಇಂದು", "ivattu", "இன்று", "indru"]):
+    elif any(k in text_lower for k in ["this afternoon", "tonight", "aaj raat", "आज रात"]):
         fields_dict["incident_date"] = ("Today", FieldConfidence.HIGH)
+    elif any(k in text_lower for k in ["aaj", "आज", "today", "ee roju", "eeraju", "eeroju", "ఈ రోజు", "ఈరోజు", "ఇవాళ", "ಇವತ್ತು", "ಇಂದು", "ivattu", "இன்று", "indru", "just now"]):
+        if time_re:
+            t_clean = re.sub(r"(?:గంటలకు|గంటలకి|బజే|baje)", "PM", time_re.group(1))
+            fields_dict["incident_date"] = (f"Today {t_clean}", FieldConfidence.HIGH)
+        else:
+            fields_dict["incident_date"] = ("Today", FieldConfidence.HIGH)
+    elif weekday_re:
+        fields_dict["incident_date"] = (weekday_re.group(0).strip().title(), FieldConfidence.HIGH)
     elif any(k in text_lower for k in [
         "సాయంత్రం", "సాయంకాలం", "ఉదయం", "పొద్దున్న", "మధ్యాహ్నం", "రాత్రి",
         "ఆదివారం", "సోమవారం", "మంగళవారం", "బుధవారం", "గురువారం", "శుక్రవారం", "శనివారం",
@@ -1054,26 +1179,21 @@ def extract_claim_fields(transcript: str) -> Tuple[list[ClaimField], list[str]]:
         ]
         eng_parts = [eng for ind, eng in indic_time_to_eng if ind in text]
         fields_dict["incident_date"] = (" ".join(dict.fromkeys(eng_parts)) or "Yesterday Evening", FieldConfidence.HIGH)
+    elif time_re:
+        t_clean = re.sub(r"(?:గంటలకు|గంటలకి|బజే|baje)", "PM", time_re.group(1))
+        fields_dict["incident_date"] = (t_clean, FieldConfidence.HIGH)
     else:
-        date_re = re.search(r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{2}-\d{2})\b", text)
-        time_re = re.search(r"\b(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM|గంటలకు|గంటలకి|బజే|baje|o'clock))\b", text)
-        if date_re and time_re:
-            t_clean = re.sub(r"(?:గంటలకు|గంటలకి|బజే|baje)", "PM", time_re.group(1))
-            fields_dict["incident_date"] = (f"{date_re.group(1)} {t_clean}", FieldConfidence.HIGH)
-        elif date_re:
-            fields_dict["incident_date"] = (date_re.group(1), FieldConfidence.HIGH)
-        elif time_re:
-            t_clean = re.sub(r"(?:గంటలకు|గంటలకి|బజే|baje)", "PM", time_re.group(1))
-            fields_dict["incident_date"] = (t_clean, FieldConfidence.HIGH)
-        else:
-            fields_dict["incident_date"] = (None, FieldConfidence.MISSING)
+        fields_dict["incident_date"] = (None, FieldConfidence.MISSING)
 
     # ── 5. Damage Description (Always Translated/Normalized to English for Insurer) ──
     damage_indicators = [
         # English / Hinglish
-        "damage", "damaged", "tut gaya", "pichak gaya", "crushed", "broken", "hit", "leak", "dent", "dented",
-        "fender", "door", "bonnet", "bumper", "headlight", "headlamp", "mudguard", "radiator", "scratch", "scratched",
-        "windshield", "glass", "mirror", "indicator", "fork", "wheel", "rim", "tank",
+        "damage", "damaged", "tut gaya", "toot gaya", "pichak gaya", "crushed", "broken", "broke",
+        "hit", "leak", "dent", "dented", "fender", "door", "bonnet", "bumper", "headlight", "headlamp",
+        "mudguard", "radiator", "scratch", "scratched", "windshield", "glass", "shatter", "shattered",
+        "mirror", "indicator", "fork", "wheel", "rim", "tank", "fairing", "exhaust", "silencer",
+        "clutch", "brake", "lever", "chassis", "frame", "panel", "boot", "dickie", "dicky", "roof",
+        "tailgate", "skid", "skidded", "slipped", "fell", "crashed", "collided", "rammed", "smashed", "cracked",
         # Telugu
         "డ్యామేజ్", "డామేజ్", "లెఫ్ట్ డోర్", "రైట్ డోర్", "డోర్", "బంపర్", "మడ్ గార్డ్", "మడ్‌గార్డ్",
         "హెడ్‌లైట్", "హెడ్ లైట్", "బోనెట్", "హిట్", "గుద్దింది", "గుద్దేశాడు", "పగిలిపోయింది", "పగిలింది",
@@ -1154,9 +1274,9 @@ def validate_and_normalize_field_answer(
         if f.confidence != FieldConfidence.MISSING and f.value
     }
 
-    # Also check relaxed phonetic policy/vehicle number when no keyword was spoken (e.g. "ಕೆ ಎ ಥರ್ಟೀ ಫೋರ್ ಟು ಟ್ವೆಂಟಿ ತ್ರೀ")
+    # Also check relaxed universal registration & phonetic policy/vehicle extraction
     if "policy_reference" not in routed and not is_question:
-        candidate_pol = parse_indic_phonetic_policy(text, require_keyword=False)
+        candidate_pol = _extract_universal_indian_registration(text) or parse_indic_phonetic_policy(text, require_keyword=False)
         if candidate_pol and any(c.isdigit() for c in candidate_pol):
             routed["policy_reference"] = candidate_pol
 
@@ -1164,16 +1284,16 @@ def validate_and_normalize_field_answer(
     if is_question:
         help_prompts = {
             "policy_reference": {
-                "kn-IN": "ಇದು ನಿಮ್ಮ ವಾಹನದ ನೋಂದಣಿ ಸಂಖ್ಯೆ (ಉದಾ: KA-17-EA-4590) ಅಥವಾ ಇನ್ಶೂರೆನ್ಸ್ ಪಾಲಿಸಿ ಸಂಖ್ಯೆ (ಉದಾ: CS-2026-000085). ದಯವಿಟ್ಟು ನಿಮ್ಮ ವಾಹನ ಅಥವಾ ಪಾಲಿಸಿ ಸಂಖ್ಯೆಯನ್ನು ಹೇಳಿ.",
-                "te-IN": "ఇది మీ వాహన రిజిస్ట్రేషన్ నంబర్ (ఉదా: TS-09-EA-4590) లేదా ఇన్సూరెన్స్ పాలసీ నంబర్. దయచేసి మీ వాహనం లేదా పాలసీ నంబర్ చెప్పండి.",
-                "hi-IN": "यह आपकी गाड़ी का रजिस्ट्रेशन नंबर (जैसे KA-17-EA-4590) या बीमा पॉलिसी नंबर है। कृपया अपना नंबर बताएं।",
-                "en-IN": "This is your Vehicle Registration Number (e.g. KA-17-EA-4590) or Insurance Policy Number. Please state your vehicle or policy number.",
+                "kn-IN": "ಇದು ನಿಮ್ಮ ವಾಹನದ ನೋಂದಣಿ ಸಂಖ್ಯೆ ಅಥವಾ ಇನ್ಶೂರೆನ್ಸ್ ಪಾಲಿಸಿ ಸಂಖ್ಯೆ. ದಯವಿಟ್ಟು ನಿಮ್ಮ ವಾಹನ ಅಥವಾ ಪಾಲಿಸಿ ಸಂಖ್ಯೆಯನ್ನು ಹೇಳಿ.",
+                "te-IN": "ఇది మీ వాహన రిజిస్ట్రేషన్ నంబర్ లేదా ఇన్సూరెన్స్ పాలసీ నంబర్. దయచేసి మీ వాహనం లేదా పాలసీ నంబర్ చెప్పండి.",
+                "hi-IN": "यह आपकी गाड़ी का रजिस्ट्रेशन नंबर या बीमा पॉलिसी नंबर है। कृपया अपना नंबर बताएं।",
+                "en-IN": "This is your Vehicle Registration Number or Insurance Policy Number. Could you share whichever you have handy?",
             },
         }
         q_Prompt = (
             help_prompts.get(target_field, {}).get(lang)
             or FIELD_QUESTIONS.get(target_field, {}).get("by_lang", {}).get(lang)
-            or "Please provide a valid answer for this field."
+            or "Could you please share that detail?"
         )
         return {
             "is_valid_for_target": False,
@@ -1186,6 +1306,12 @@ def validate_and_normalize_field_answer(
     # 2. Validate per target_field type
     if target_field == "policy_reference":
         pol_val = routed.get("policy_reference")
+        if not pol_val:
+            # Accept spoken alphanumeric/digit sequence when explicitly answering policy_reference
+            compact = re.sub(r"[^A-Za-z0-9\-]", "", text).upper()
+            if len(compact) >= 4 and sum(c.isdigit() for c in compact) >= 2:
+                pol_val = compact
+                routed["policy_reference"] = pol_val
         if pol_val:
             return {
                 "is_valid_for_target": True,
@@ -1196,10 +1322,10 @@ def validate_and_normalize_field_answer(
             }
         # Reject non-alphanumeric / non-number text for policy_reference
         err_map = {
-            "kn-IN": "ದಯವಿಟ್ಟು ಮಾನ್ಯವಾದ ವಾಹನ ನೋಂದಣಿ ಸಂಖ್ಯೆ (ಉದಾ: KA-34-223) ಅಥವಾ ಪಾಲಿಸಿ ಸಂಖ್ಯೆಯನ್ನು ಹೇಳಿ.",
-            "te-IN": "దయచేసి సరైన వాహన నంబర్ (ఉదా: TS-09-EA-4590) లేదా పాలసీ నంబర్ చెప్పండి.",
-            "hi-IN": "कृपया सही गाड़ी नंबर (जैसे KA-34-223) या पॉलिसी नंबर बताएं।",
-            "en-IN": "Please provide a valid Policy Number or Vehicle Registration Number (e.g. KA-34-223 or MOT-2024-TS-98765).",
+            "kn-IN": "ದಯವಿಟ್ಟು ಮಾನ್ಯವಾದ ವಾಹನ ನೋಂದಣಿ ಸಂಖ್ಯೆ ಅಥವಾ ಪಾಲಿಸಿ ಸಂಖ್ಯೆಯನ್ನು ತಿಳಿಸಿ.",
+            "te-IN": "దయచేసి సరైన వాహన నంబర్ లేదా పాలసీ నంబర్ చెప్పండి.",
+            "hi-IN": "कृपया अपनी गाड़ी का रजिस्ट्रेशन नंबर या पॉलिसी नंबर बताएं।",
+            "en-IN": "I didn't quite catch the number — could you share your vehicle registration or policy number?",
         }
         return {
             "is_valid_for_target": False,
@@ -1210,15 +1336,15 @@ def validate_and_normalize_field_answer(
         }
 
     if target_field == "incident_location":
-        # If the user spoke a policy/vehicle number instead of a location (like 'ಕೆ ಎ ಥರ್ಟೀ ಫೋರ್ ಟು ಟ್ವೆಂಟಿ ತ್ರೀ' -> 'KA-34-223'),
-        # route it to policy_reference and re-ask for incident_location!
+        # If the user spoke a policy/vehicle number instead of a location,
+        # route it to policy_reference and ask naturally for incident_location.
         if "policy_reference" in routed and "incident_location" not in routed:
             pol_captured = routed["policy_reference"]
             reroute_msg = {
-                "kn-IN": f"ನಿಮ್ಮ ವಾಹನ/ಪಾಲಿಸಿ ಸಂಖ್ಯೆ {pol_captured} ದಾಖಲಾಗಿದೆ. ಈಗ ದಯವಿಟ್ಟು ಅಪಘಾತ ಯಾವ ಸ್ಥಳದಲ್ಲಿ ಅಥವಾ ನಗರದಲ್ಲಿ ನಡೆಯಿತು ಎಂದು ಹೇಳಿ (ಉದಾ: ದಾವಣಗೆರೆ, ಬೆಂಗಳೂರು).",
-                "te-IN": f"మీ వాహన/పాలసీ నంబర్ {pol_captured} నమోదైంది. ఇప్పుడు దయచేసి యాక్సిడెంట్ ఏ ప్రాంతంలో లేదా నగరంలో జరిగిందో చెప్పండి (ఉదా: మధురాపూర్, హైదరాబాద్).",
-                "hi-IN": f"आपका वाहन/पॉलिसी नंबर {pol_captured} दर्ज कर लिया गया है। अब कृपया बताएं कि हादसा किस जगह या शहर में हुआ था?",
-                "en-IN": f"Noted your vehicle/policy number {pol_captured}. Now please tell me the location or city where the accident happened.",
+                "kn-IN": f"ನಿಮ್ಮ ಸಂಖ್ಯೆ {pol_captured} ದಾಖಲಾಗಿದೆ. ಈಗ ದಯವಿಟ್ಟು ಅಪಘಾತ ಎಲ್ಲಿ ನಡೆಯಿತು ಎಂದು ಹೇಳಿ.",
+                "te-IN": f"మీ నంబర్ {pol_captured} నమోదైంది. ఇప్పుడు యాక్సిడెంట్ ఎక్కడ జరిగిందో చెప్పండి.",
+                "hi-IN": f"आपका नंबर {pol_captured} नोट कर लिया है। अब कृपया बताएं कि हादसा किस जगह हुआ था?",
+                "en-IN": f"Got it, I've noted {pol_captured}. Where did the accident take place?",
             }
             return {
                 "is_valid_for_target": False,
@@ -1230,9 +1356,9 @@ def validate_and_normalize_field_answer(
 
         loc_val = routed.get("incident_location")
         if not loc_val:
-            # Transliterate arbitrary spoken place name into English if it's not a number
+            # Transliterate arbitrary spoken place name into English if it's not a pure number
             eng_candidate = transliterate_indic_to_english(text)
-            if eng_candidate and not any(c.isdigit() for c in eng_candidate) and len(eng_candidate) >= 3:
+            if eng_candidate and not eng_candidate.isdigit() and len(eng_candidate) >= 3:
                 loc_val = eng_candidate
                 routed["incident_location"] = loc_val
 
@@ -1246,10 +1372,10 @@ def validate_and_normalize_field_answer(
             }
 
         err_loc = {
-            "kn-IN": "ದಯವಿಟ್ಟು ಅಪಘಾತ ನಡೆದ ಸ್ಥಳ ಅಥವಾ ನಗರದ ಹೆಸರನ್ನು ಹೇಳಿ (ಉದಾ: ದಾವಣಗೆರೆ, ಬೆಂಗಳೂರು).",
-            "te-IN": "దయచేసి యాక్సిడెంట్ జరిగిన ప్రాంతం లేదా నగరం పేరు చెప్పండి (ఉదా: హైదరాబాద్, విజయవాడ).",
-            "hi-IN": "कृपया हादसे के स्थान या शहर का नाम बताएं।",
-            "en-IN": "Please state the city or locality where the accident occurred.",
+            "kn-IN": "ಅಪಘಾತ ನಡೆದ ಸ್ಥಳ ಅಥವಾ ನಗರವನ್ನು ತಿಳಿಸಬಹುದೇ?",
+            "te-IN": "యాక్సిడెంట్ జరిగిన ప్రాంతం లేదా నగరం పేరు చెప్పగలరా?",
+            "hi-IN": "कृपया हादसे की जगह या शहर का नाम बताएं।",
+            "en-IN": "Could you share the area or city where the accident occurred?",
         }
         return {
             "is_valid_for_target": False,
@@ -1261,6 +1387,14 @@ def validate_and_normalize_field_answer(
 
     if target_field == "incident_date":
         date_val = routed.get("incident_date")
+        if not date_val:
+            # Accept natural temporal replies containing a digit or time/day keyword
+            if len(text) >= 3 and (
+                any(c.isdigit() for c in text)
+                or any(k in text.lower() for k in ["morning", "evening", "afternoon", "night", "noon", "week", "month", "day", "ago", "last", "this", "shaam", "subah", "raat", "kal", "aaj", "ninna", "ninne", "ivattu", "netru"])
+            ):
+                date_val = transliterate_indic_to_english(text) if any(ord(c) > 127 for c in text) else text.strip()
+                routed["incident_date"] = date_val
         if date_val:
             return {
                 "is_valid_for_target": True,
@@ -1505,4 +1639,254 @@ def generate_assistant_dialogue(
         "display_text": full_dialogue,
         "speech_text": full_dialogue,
         "language": lang,
+    }
+
+
+def extract_multimodal_slots(text: str, language_hint: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Extract key multi-slot information from conversational or code-mixed utterances:
+    - claimed_vehicle_type ('two_wheeler' vs 'four_wheeler')
+    - vehicle_registration (normalized uppercase e.g. KA-17-AB-1234)
+    - damage_keywords (list of detected damage tokens)
+    - incident_description (text summary)
+    - detected_language (code-mixed or Indic language tag)
+    """
+    raw_text = (text or "").strip()
+    text_lower = raw_text.lower()
+
+    # 1. Vehicle Registration Number (Universal Indian Format Normalization)
+    vehicle_registration = _extract_universal_indian_registration(raw_text)
+
+    # 2. Claimed Vehicle Type (Two-Wheeler vs Four-Wheeler)
+    two_wheeler_markers = [
+        "bike", "motorcycle", "scooter", "scooty", "activa", "dio", "jupiter",
+        "pulsar", "splendor", "apache", "bullet", "2w", "two wheeler", "two-wheeler",
+        "two_wheeler", "ಬೈಕ್", "ಬೈಕು", "ಸ್ಕೂಟರ್", "बाइक", "स्कूटी", "स्कूटर",
+        "பைக்", "பைக்கை", "బైక్", "బైకు",
+    ]
+    four_wheeler_markers = [
+        "car", "sedan", "suv", "hatchback", "swift", "baleno", "creta", "nexon",
+        "innova", "four wheeler", "four-wheeler", "four_wheeler", "4w", "gaadi",
+        "gadi", "कार", "गाड़ी", "ಕಾರ್", "ಕಾರು", "கார்", "కారు", "కార్",
+    ]
+    claimed_vehicle_type = None
+    if any(marker in text_lower for marker in two_wheeler_markers):
+        claimed_vehicle_type = "two_wheeler"
+    elif any(marker in text_lower for marker in four_wheeler_markers):
+        claimed_vehicle_type = "four_wheeler"
+
+    # 3. Damage Keywords
+    candidate_damages = [
+        "headlamp", "headlight", "fairing", "mudguard", "bumper", "windshield",
+        "glass", "dent", "scratch", "crack", "shatter", "door", "hood", "bonnet",
+        "fender", "mirror", "side mirror", "tire", "lamp", "indicator", "broken",
+        "break", "toot", "tuta", "tooti", "damage", "scratches", "dents",
+        "cracks", "haani",
+    ]
+    damage_keywords = [d for d in candidate_damages if d in text_lower]
+
+    # 4. Detected Language (with Code-Mixed Latn variants)
+    detected_lang = "en-IN"
+    if any(0x0C80 <= ord(c) <= 0x0CFF for c in raw_text):
+        detected_lang = "kn-IN"
+    elif any(0x0C00 <= ord(c) <= 0x0C7F for c in raw_text):
+        detected_lang = "te-IN"
+    elif any(0x0B80 <= ord(c) <= 0x0BFF for c in raw_text):
+        detected_lang = "ta-IN"
+    elif any(0x0900 <= ord(c) <= 0x097F for c in raw_text):
+        detected_lang = "hi-IN"
+    else:
+        # Romanized code-mixed checks
+        tokens = set(re.findall(r"[a-z]+", text_lower))
+        kanglish_markers = {"nanna", "aagide", "aayitu", "mattu", "illi", "alli", "hattira", "ninne", "ivattu", "maadide", "beku"}
+        tanglish_markers = {"ennoda", "vandi", "aagiduchu", "aachu", "netru", "pakkathula", "indru", "thayavu"}
+        tenglish_markers = {"naa", "chudandi", "ayyindi", "aindi", "chesindi", "ninna", "eeroju", "vachi", "dayachesi"}
+        hinglish_markers = {"mera", "meri", "mere", "hua", "gaya", "gayi", "tha", "thi", "hai", "ho gaya", "tut", "toot", "kripya", "dekho"}
+
+        if len(tokens & kanglish_markers) >= 1:
+            detected_lang = "kn-Latn"
+        elif len(tokens & tanglish_markers) >= 1:
+            detected_lang = "ta-Latn"
+        elif len(tokens & tenglish_markers) >= 1:
+            detected_lang = "te-Latn"
+        elif len(tokens & hinglish_markers) >= 1:
+            detected_lang = "hi-Latn"
+        elif language_hint and language_hint.lower() != "indic-auto":
+            detected_lang = language_hint
+
+    return {
+        "claimed_vehicle_type": claimed_vehicle_type,
+        "vehicle_registration": vehicle_registration,
+        "damage_keywords": damage_keywords,
+        "incident_description": raw_text,
+        "detected_language": detected_lang,
+    }
+
+
+def generate_code_mixed_slot_reply(
+    slots: Dict[str, Any],
+    language_hint: Optional[str] = None,
+) -> str:
+    """
+    Generate a concise (1-2 sentences, <35 words), empathetic roadside voice reply
+    matching the speaker's language or code-mix (Hinglish, Kanglish, Tanglish, Teluglish, English).
+    Zero markdown or JSON symbols.
+    """
+    lang_norm = (language_hint or slots.get("detected_language") or "en-IN").lower()
+    vtype = slots.get("claimed_vehicle_type")
+    reg = slots.get("vehicle_registration") or ""
+    dmgs = slots.get("damage_keywords") or []
+    dmg_phrase = " aur ".join(dmgs[:2]) if "hi" in lang_norm or "hinglish" in lang_norm else ", ".join(dmgs[:2])
+
+    if "kn" in lang_norm or "kanglish" in lang_norm:
+        v_word = "bike" if vtype == "two_wheeler" else "car" if vtype == "four_wheeler" else "vehicle"
+        reg_part = f" {reg}" if reg else ""
+        return f"Nimma {v_word}{reg_part} damage vivara note maadiddene. Dayavittu ega damage photo upload maadi."
+    if "ta" in lang_norm or "tanglish" in lang_norm:
+        v_word = "bike" if vtype == "two_wheeler" else "car" if vtype == "four_wheeler" else "vehicle"
+        reg_part = f" {reg}" if reg else ""
+        return f"Unga {v_word}{reg_part} damage vivaram note pannitten. Ippo damaged photo upload pannunga."
+    if "te" in lang_norm or "teluglish" in lang_norm or "tenglish" in lang_norm:
+        v_word = "bike" if vtype == "two_wheeler" else "car" if vtype == "four_wheeler" else "vehicle"
+        reg_part = f" {reg}" if reg else ""
+        return f"Mee {v_word}{reg_part} damage vivaralu note chesanu. Ippudu damage photo upload cheyandi."
+    if "hi" in lang_norm or "hinglish" in lang_norm:
+        v_word = "bike" if vtype == "two_wheeler" else "car" if vtype == "four_wheeler" else "gaadi"
+        reg_part = f" {reg}" if reg else ""
+        dmg_note = f" ke {dmg_phrase}" if dmg_phrase else ""
+        return f"Maine aapki {v_word}{reg_part}{dmg_note} ka damage note kar liya hai. Ab kripya photo upload karein."
+
+    v_word = "bike" if vtype == "two_wheeler" else "car" if vtype == "four_wheeler" else "vehicle"
+    reg_part = f" {reg}" if reg else ""
+    dmg_note = f" ({dmg_phrase})" if dmg_phrase else ""
+    return f"Got it, I have noted the damage for your {v_word}{reg_part}{dmg_note}. Please upload a clear photo now."
+
+
+def _format_damage_names_for_speech(damages: Optional[list]) -> str:
+    """Convert damage items (dicts or strings) into a concise spoken phrase."""
+    if not damages:
+        return ""
+    names = []
+    for item in damages:
+        if isinstance(item, str):
+            raw = item
+        elif isinstance(item, dict):
+            raw = item.get("damage_type") or item.get("class_name") or ""
+        else:
+            raw = ""
+        clean = str(raw).replace("_", " ").strip()
+        if clean and clean not in names:
+            names.append(clean)
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0]
+    return f"{names[0]} and {names[1]}"
+
+
+def generate_evidence_narration(
+    decision: str,
+    claimed_vehicle_type: str = "four_wheeler",
+    detected_vehicle_category: Optional[str] = None,
+    vehicle_category_mismatch: bool = False,
+    total_estimated_inr: float = 0.0,
+    damages: Optional[list] = None,
+    language: Optional[str] = "hi-IN",
+) -> Dict[str, Any]:
+    """
+    Generate spoken Indic / code-mixed explanation for multimodal evidence verdict.
+    Concise (1-3 sentences, <40 words, no markdown or symbols) for clean TTS playback.
+    Handles PASS (approved estimate), REVIEW (provisional queue), and REJECT (category mismatch or file error).
+    """
+    amt = int(round(float(total_estimated_inr or 0)))
+    lang_code = (language or "hi-IN").strip()
+    norm = lang_code.lower()
+    dmg_phrase = _format_damage_names_for_speech(damages)
+
+    if "kn" in norm or "kanglish" in norm:
+        target_lang = "kn-IN"
+        if decision == "REJECT":
+            if vehicle_category_mismatch:
+                if claimed_vehicle_type == "two_wheeler":
+                    spoken = "Photo reject aagide. Neevu bike claim maadiddiri aadare car photo upload aagide. Dayavittu bike photo upload maadi."
+                else:
+                    spoken = "Photo reject aagide. Neevu car claim maadiddiri aadare bike photo upload aagide. Dayavittu car photo upload maadi."
+            else:
+                spoken = "File integrity dooshadinda photo reject aagide. Dayavittu innondu spashtavada photo upload maadi."
+        elif decision == "PASS":
+            dmg_text = f" ({dmg_phrase})" if dmg_phrase else ""
+            spoken = f"Evidence verify aagide. AI damage{dmg_text} detect maadi {amt} rupayi repair estimate approve maadide."
+        else:
+            spoken = f"Evidence preliminary review queue ge hogide. Sumaru {amt} rupayi provisional estimate ide, surveyor verify maaduttare."
+
+    elif "ta" in norm or "tanglish" in norm:
+        target_lang = "ta-IN"
+        if decision == "REJECT":
+            if vehicle_category_mismatch:
+                if claimed_vehicle_type == "two_wheeler":
+                    spoken = "Photo reject aagiduchu. Neenga bike claim panneenga aana car photo upload aachu. Thayavu seidhu bike photo upload pannunga."
+                else:
+                    spoken = "Photo reject aagiduchu. Neenga car claim panneenga aana bike photo upload aachu. Thayavu seidhu car photo upload pannunga."
+            else:
+                spoken = "File integrity kolarinaal photo reject aagiduchu. Thayavu seidhu vera thelivaana photo upload pannunga."
+        elif decision == "PASS":
+            dmg_text = f" ({dmg_phrase})" if dmg_phrase else ""
+            spoken = f"Evidence verify aagiduchu. AI damage{dmg_text} kandupidithu {amt} roobai repair estimate approve panniyullathu."
+        else:
+            spoken = f"Evidence preliminary review queue ku anuppappattullathu. Sumaar {amt} roobai provisional estimate kidaithullathu, surveyor verify seivaar."
+
+    elif "te" in norm or "teluglish" in norm or "tenglish" in norm:
+        target_lang = "te-IN"
+        if decision == "REJECT":
+            if vehicle_category_mismatch:
+                if claimed_vehicle_type == "two_wheeler":
+                    spoken = "Photo reject ayyindi. Meeru bike claim chesaru kani car photo upload aindi. Dayachesi bike photo upload cheyandi."
+                else:
+                    spoken = "Photo reject ayyindi. Meeru car claim chesaru kani bike photo upload aindi. Dayachesi car photo upload cheyandi."
+            else:
+                spoken = "File integrity samasya valla photo reject ayyindi. Dayachesi maro spastamaina photo upload cheyandi."
+        elif decision == "PASS":
+            dmg_text = f" ({dmg_phrase})" if dmg_phrase else ""
+            spoken = f"Evidence verify ayyindi. AI damage{dmg_text} gurtinchi {amt} roopayala repair estimate approve chesindi."
+        else:
+            spoken = f"Evidence preliminary review queue ki pampabadindi. Sumaru {amt} roopayala provisional estimate vachindi, surveyor verify chestaru."
+
+    elif "hi" in norm or "hinglish" in norm:
+        target_lang = "hi-IN"
+        if decision == "REJECT":
+            if vehicle_category_mismatch:
+                if claimed_vehicle_type == "two_wheeler":
+                    spoken = "Photo reject ho gaya hai. Aapne bike claim kiya hai par photo car ka upload hua hai. Kripya apni bike ki photo upload karein."
+                else:
+                    spoken = "Photo reject ho gaya hai. Aapne car claim kiya hai par photo bike ka upload hua hai. Kripya apni car ki photo upload karein."
+            else:
+                spoken = "Photo reject ho gaya hai file integrity failure ke kaaran. Kripya doosri saaf photo upload karein."
+        elif decision == "PASS":
+            dmg_text = f" ({dmg_phrase.replace(' and ', ' aur ')})" if dmg_phrase else ""
+            spoken = f"Evidence verify ho gaya hai. AI ne damage{dmg_text} detect karke {amt} rupaye ka repair estimate approve kiya hai."
+        else:
+            spoken = f"Evidence preliminary review queue mein bhej diya gaya hai. Lagbhag {amt} rupaye ka provisional estimate mila hai, surveyor jald verify karenge."
+
+    else:
+        target_lang = "en-IN"
+        if decision == "REJECT":
+            if vehicle_category_mismatch:
+                if claimed_vehicle_type == "two_wheeler":
+                    spoken = "Photo rejected due to vehicle mismatch. You claimed a bike accident but uploaded a car photo. Please upload a bike photo."
+                else:
+                    spoken = "Photo rejected due to vehicle mismatch. You claimed a car accident but uploaded a bike photo. Please upload a car photo."
+            else:
+                spoken = "Photo rejected due to file integrity issue. Please upload a clear original photo."
+        elif decision == "PASS":
+            dmg_text = f" {dmg_phrase}" if dmg_phrase else " the damage"
+            spoken = f"Evidence verified successfully. AI detected{dmg_text} and approved an initial repair estimate of {amt} rupees."
+        else:
+            spoken = f"Evidence flagged for human review. Provisional estimate is {amt} rupees. A claims officer will verify shortly."
+
+    return {
+        "spoken_narration": spoken,
+        "narration_text": spoken,
+        "language": target_lang,
+        "decision": decision,
+        "total_estimated_inr": float(amt),
     }

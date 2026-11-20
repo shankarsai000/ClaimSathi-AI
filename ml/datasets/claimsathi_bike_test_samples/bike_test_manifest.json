@@ -1,0 +1,50 @@
+[
+  {
+    "file": "01_genuine_bike_pass/genuine_bike_01.jpg",
+    "expected_decision": "PASS",
+    "vehicle_type": "motorcycle",
+    "source": "Real Roboflow 2W Validation Photo"
+  },
+  {
+    "file": "01_genuine_bike_pass/genuine_bike_02.jpg",
+    "expected_decision": "PASS",
+    "vehicle_type": "motorcycle",
+    "source": "Real Roboflow 2W Validation Photo"
+  },
+  {
+    "file": "01_genuine_bike_pass/genuine_bike_03.jpg",
+    "expected_decision": "PASS",
+    "vehicle_type": "motorcycle",
+    "source": "Real Roboflow 2W Validation Photo"
+  },
+  {
+    "file": "01_genuine_bike_pass/genuine_bike_04.jpg",
+    "expected_decision": "PASS",
+    "vehicle_type": "motorcycle",
+    "source": "Real Roboflow 2W Validation Photo"
+  },
+  {
+    "file": "01_genuine_bike_pass/genuine_bike_05.jpg",
+    "expected_decision": "PASS",
+    "vehicle_type": "motorcycle",
+    "source": "Real Roboflow 2W Validation Photo"
+  },
+  {
+    "file": "02_screen_recapture_bike_review/screen_spoof_bike_01.jpg",
+    "expected_decision": "REVIEW",
+    "vehicle_type": "motorcycle",
+    "source": "Screen Recapture of Real 2W Photo"
+  },
+  {
+    "file": "02_screen_recapture_bike_review/screen_spoof_bike_02.jpg",
+    "expected_decision": "REVIEW",
+    "vehicle_type": "motorcycle",
+    "source": "Screen Recapture of Real 2W Photo"
+  },
+  {
+    "file": "02_screen_recapture_bike_review/screen_spoof_bike_03.jpg",
+    "expected_decision": "REVIEW",
+    "vehicle_type": "motorcycle",
+    "source": "Screen Recapture of Real 2W Photo"
+  }
+]

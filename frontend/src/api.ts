@@ -1,6 +1,11 @@
 import type {
   TranscriptResponse,
   VoiceTranscribeResponse,
+  EvidenceNarrationRequest,
+  EvidenceNarrationResponse,
+  ExtractSlotsResponse,
+  ConverseTurnRequest,
+  ConverseTurnResponse,
   ClaimCreateRequest,
   ClaimCreateResponse,
   ClaimDetailResponse,
@@ -17,6 +22,8 @@ import type {
   ReportRecord,
   InsurerSubmissionResponse,
   ClaimRecord,
+  EvidenceVerificationReport,
+  EvidenceVerificationHistoryResponse,
 } from './types'
 
 const BASE = '/api'
@@ -123,18 +130,30 @@ export const api = {
     }
   },
 
-  // ── Phase 2 & 3: Live Gnani Prisma STT & Timbre TTS ──
+  // ── Phase 2 & 3: Live Gnani Prisma STT & Stateful Conversation ──
   transcribeVoice: async (
     audioBlob: Blob | File,
     filename: string = 'recording.wav',
     demo: boolean = false,
     languageCode?: string,
+    knownFields?: Record<string, string | null>,
+    history?: Array<{ sender: 'user' | 'assistant'; text: string }>,
+    expectedField?: string | null,
   ): Promise<VoiceTranscribeResponse> => {
     const formData = new FormData()
     formData.append('audio_file', audioBlob, filename)
     formData.append('demo', demo ? 'true' : 'false')
     if (languageCode) {
       formData.append('language_code', languageCode)
+    }
+    if (knownFields) {
+      formData.append('known_fields_json', JSON.stringify(knownFields))
+    }
+    if (history && history.length > 0) {
+      formData.append('history_json', JSON.stringify(history))
+    }
+    if (expectedField) {
+      formData.append('expected_field', expectedField)
     }
 
     const resp = await fetch(`${BASE}/voice/transcribe`, {
@@ -147,6 +166,15 @@ export const api = {
       throw new Error(err.detail || `Voice transcription failed with status ${resp.status}`)
     }
     return resp.json()
+  },
+
+  converseClaimTurn: async (
+    req: ConverseTurnRequest,
+  ): Promise<ConverseTurnResponse> => {
+    return request<ConverseTurnResponse>('/v1/voice/converse', {
+      method: 'POST',
+      body: JSON.stringify(req),
+    })
   },
 
   synthesizeSpeech: async (
@@ -172,6 +200,25 @@ export const api = {
     return resp.blob()
   },
 
+  extractVoiceSlots: async (
+    text: string,
+    language: string = 'indic-auto',
+  ): Promise<ExtractSlotsResponse> => {
+    return request<ExtractSlotsResponse>('/v1/voice/extract-slots', {
+      method: 'POST',
+      body: JSON.stringify({ text, language }),
+    })
+  },
+
+  narrateEvidence: async (
+    req: EvidenceNarrationRequest,
+  ): Promise<EvidenceNarrationResponse> => {
+    return request<EvidenceNarrationResponse>('/v1/voice/narrate-evidence', {
+      method: 'POST',
+      body: JSON.stringify(req),
+    })
+  },
+
   transcribe: (language = 'hi-en') =>
     request<TranscriptResponse>('/claims/transcribe', {
       method: 'POST',
@@ -187,6 +234,10 @@ export const api = {
       assistant_dialogue: string
       assistant_speech_text: string
       assistant_language: string
+      claimed_vehicle_type?: 'two_wheeler' | 'four_wheeler' | null
+      vehicle_registration?: string | null
+      damage_keywords?: string[]
+      incident_description?: string | null
     }>('/claims/extract-text', {
       method: 'POST',
       body: JSON.stringify({ text, language }),
@@ -351,4 +402,66 @@ export const api = {
     ),
 
   getStats: () => request<DashboardStats>('/claims/stats'),
+
+  // ── Sprint 1.4 / 1.5 / 1.6: 5-Stage Evidence Verification & INR Cost Estimate ──
+  verifyEvidenceV1: async (
+    file: File,
+    claimedVehicleType: 'four_wheeler' | 'two_wheeler' = 'four_wheeler',
+  ): Promise<EvidenceVerificationReport> => {
+    const token = getStoredToken()
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('claimed_vehicle_type', claimedVehicleType)
+    const resp = await fetch(`${BASE}/v1/evidence/verify`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    })
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: resp.statusText }))
+      throw new Error(err.detail || `Verification failed: ${resp.status}`)
+    }
+    return resp.json()
+  },
+
+  getEvidenceHistoryV1: (limit: number = 25) =>
+    request<EvidenceVerificationHistoryResponse>(`/v1/evidence/history?limit=${limit}`),
+
+  getEvidenceVerificationByIdV1: (evidenceId: string) =>
+    request<EvidenceVerificationReport>(`/v1/evidence/${encodeURIComponent(evidenceId)}`),
+
+  // ── Sprint 1.7: Reviewer Decision Override & Official Claim Creation ──
+  overrideEvidenceDecision: (
+    evidenceId: string,
+    newDecision: 'PASS' | 'REJECT',
+    reviewerNote: string = 'Manual adjuster review completed.',
+  ) =>
+    request<EvidenceVerificationReport>(`/v1/evidence/${encodeURIComponent(evidenceId)}/override`, {
+      method: 'POST',
+      body: JSON.stringify({
+        new_decision: newDecision,
+        reviewer_note: reviewerNote,
+      }),
+    }),
+
+  createClaimFromEvidence: (
+    evidenceId: string,
+    data: {
+      policy_number?: string
+      vehicle_registration?: string
+      incident_description?: string
+    } = {},
+  ) =>
+    request<EvidenceVerificationReport>(
+      `/v1/evidence/${encodeURIComponent(evidenceId)}/create-claim`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          policy_number: data.policy_number || 'POL-IND-2026-8841',
+          vehicle_registration: data.vehicle_registration || 'KA-01-MJ-2026',
+          incident_description:
+            data.incident_description || 'Automated AI damage assessment submission.',
+        }),
+      },
+    ),
 }

@@ -1331,3 +1331,152 @@ async def get_user_audit_logs(user_id: str, limit: int = 25) -> List[Dict[str, A
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
+
+
+# ── Sprint 1.4: 5-Stage Evidence Verifications Persistence ─────────────────
+EVIDENCE_VERIFICATIONS_DDL = """
+CREATE TABLE IF NOT EXISTS evidence_verifications (
+    id TEXT PRIMARY KEY,
+    filename TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    spoof_risk REAL NOT NULL,
+    predicted_spoof_class TEXT NOT NULL,
+    vehicle_detected INTEGER NOT NULL,
+    damage_count INTEGER NOT NULL,
+    stage_results_json TEXT NOT NULL,
+    reasons_json TEXT NOT NULL,
+    processing_time_ms REAL NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_verifications_sha256 ON evidence_verifications(sha256);
+CREATE INDEX IF NOT EXISTS idx_evidence_verifications_decision ON evidence_verifications(decision);
+CREATE INDEX IF NOT EXISTS idx_evidence_verifications_created_at ON evidence_verifications(created_at);
+"""
+
+
+def _target_verification_db_paths() -> List[str]:
+    """Return canonical primary DB path plus data/claimsathi.db if different."""
+    primary = os.path.abspath(get_db_path())
+    data_db = os.path.abspath(str(BASE_DIR / "data" / "claimsathi.db"))
+    if primary == data_db:
+        return [primary]
+    return [primary, data_db]
+
+
+async def _ensure_verifications_schema(db: aiosqlite.Connection) -> None:
+    await db.executescript(EVIDENCE_VERIFICATIONS_DDL)
+    await db.commit()
+
+
+async def save_evidence_verification(record: Dict[str, Any]) -> None:
+    """Persist a 5-stage evidence verification result to SQLite."""
+    params = (
+        record["id"],
+        record["filename"],
+        record["sha256"],
+        record["decision"],
+        float(record["spoof_risk"]),
+        record["predicted_spoof_class"],
+        int(bool(record["vehicle_detected"])),
+        int(record["damage_count"]),
+        json.dumps(record["stage_results"]),
+        json.dumps(record["reasons"]),
+        float(record["processing_time_ms"]),
+        record["created_at"],
+    )
+    sql = """
+        INSERT OR REPLACE INTO evidence_verifications (
+            id, filename, sha256, decision, spoof_risk, predicted_spoof_class,
+            vehicle_detected, damage_count, stage_results_json, reasons_json,
+            processing_time_ms, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+    for target_db in _target_verification_db_paths():
+        async with get_db_connection(target_db) as db:
+            await _ensure_verifications_schema(db)
+            await db.execute(sql, params)
+            await db.commit()
+
+
+def _row_to_verification_dict(r: aiosqlite.Row) -> Dict[str, Any]:
+    stage_results = json.loads(r["stage_results_json"] or "{}")
+    cost_estimate = stage_results.get("cost_estimate")
+    if cost_estimate is None:
+        from .evidence.cost_estimator import estimate_damage_cost
+
+        damages = (stage_results.get("stage3b_damage") or {}).get("detections", [])
+        cost_estimate = estimate_damage_cost(damages=damages, decision=r["decision"])
+    claimed_vt = stage_results.get("claimed_vehicle_type", "four_wheeler")
+    detected_vc = stage_results.get(
+        "detected_vehicle_category",
+        (stage_results.get("stage3b_damage") or {}).get("resolved_vehicle_category")
+        or (stage_results.get("stage3a_vehicle") or {}).get("detected_vehicle_category")
+        or "unknown",
+    )
+    mismatch = bool(stage_results.get("vehicle_category_mismatch", False))
+    return {
+        "id": r["id"],
+        "filename": r["filename"],
+        "sha256": r["sha256"],
+        "decision": r["decision"],
+        "claimed_vehicle_type": claimed_vt,
+        "detected_vehicle_category": detected_vc,
+        "vehicle_category_mismatch": mismatch,
+        "spoof_risk": r["spoof_risk"],
+        "predicted_spoof_class": r["predicted_spoof_class"],
+        "vehicle_detected": bool(r["vehicle_detected"]),
+        "damage_count": r["damage_count"],
+        "cost_estimate": cost_estimate,
+        "stage_results": stage_results,
+        "linked_claim": stage_results.get("linked_claim"),
+        "reasons": json.loads(r["reasons_json"] or "[]"),
+        "processing_time_ms": r["processing_time_ms"],
+        "created_at": r["created_at"],
+    }
+
+
+async def update_evidence_verification_record(
+    verification_id: str,
+    decision: str,
+    stage_results: Dict[str, Any],
+    reasons: List[str],
+) -> Optional[Dict[str, Any]]:
+    """Update decision, stage_results_json, and reasons_json for an existing verification across all DB targets."""
+    stage_results_json = json.dumps(stage_results)
+    reasons_json = json.dumps(reasons)
+    sql = """
+        UPDATE evidence_verifications
+        SET decision = ?, stage_results_json = ?, reasons_json = ?
+        WHERE id = ?
+    """
+    for target_db in _target_verification_db_paths():
+        async with get_db_connection(target_db) as db:
+            await _ensure_verifications_schema(db)
+            await db.execute(sql, (decision, stage_results_json, reasons_json, verification_id))
+            await db.commit()
+    return await get_evidence_verification_by_id(verification_id)
+
+
+async def get_evidence_verification_history(limit: int = 50) -> List[Dict[str, Any]]:
+    """Return recent 5-stage evidence verification runs ordered newest-first."""
+    async with get_db_connection() as db:
+        await _ensure_verifications_schema(db)
+        cursor = await db.execute(
+            "SELECT * FROM evidence_verifications ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        return [_row_to_verification_dict(r) for r in rows]
+
+
+async def get_evidence_verification_by_id(verification_id: str) -> Optional[Dict[str, Any]]:
+    """Return a single 5-stage verification record by UUID."""
+    async with get_db_connection() as db:
+        await _ensure_verifications_schema(db)
+        cursor = await db.execute(
+            "SELECT * FROM evidence_verifications WHERE id = ?",
+            (verification_id,),
+        )
+        row = await cursor.fetchone()
+        return _row_to_verification_dict(row) if row else None

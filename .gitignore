@@ -28,4 +28,13 @@ dist-ssr/
 Thumbs.db
 .vscode/
 .idea/
+*.tsbuildinfo
+
+# Root scratch archives & notebooks (canonical copies live in models/ and ml/datasets/)
+/*.zip
+/*.ipynb
+/bike_damage_yolov8s.pt
+/claimsathi_bike_test_samples/
+/claimsathi_local_test_samples/
+
 

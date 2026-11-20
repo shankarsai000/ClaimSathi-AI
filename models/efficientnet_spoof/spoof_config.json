@@ -1,0 +1,115 @@
+{
+  "model_architecture": "efficientnet_v2_s",
+  "input_resolution": [
+    384,
+    384
+  ],
+  "normalization": {
+    "mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "std": [
+      0.229,
+      0.224,
+      0.225
+    ]
+  },
+  "class_map": {
+    "genuine": 0,
+    "screen_recapture": 1,
+    "manipulated_or_synthetic": 2
+  },
+  "risk_thresholds": {
+    "pass_max_spoof_risk": 0.25,
+    "review_min_spoof_risk": 0.25,
+    "high_risk_flag": 0.7
+  },
+  "training_history": [
+    {
+      "epoch": 1,
+      "train_loss": 0.4761,
+      "val_loss": 0.2257,
+      "macro_f1": 0.9875,
+      "spoof_roc_auc": 0.9991
+    },
+    {
+      "epoch": 2,
+      "train_loss": 0.2746,
+      "val_loss": 0.2171,
+      "macro_f1": 0.9833,
+      "spoof_roc_auc": 0.9971
+    },
+    {
+      "epoch": 3,
+      "train_loss": 0.2718,
+      "val_loss": 0.1856,
+      "macro_f1": 1.0,
+      "spoof_roc_auc": 1.0
+    },
+    {
+      "epoch": 4,
+      "train_loss": 0.2145,
+      "val_loss": 0.3611,
+      "macro_f1": 0.9875,
+      "spoof_roc_auc": 0.993
+    },
+    {
+      "epoch": 5,
+      "train_loss": 0.2137,
+      "val_loss": 0.1854,
+      "macro_f1": 1.0,
+      "spoof_roc_auc": 1.0
+    },
+    {
+      "epoch": 6,
+      "train_loss": 0.1987,
+      "val_loss": 0.1856,
+      "macro_f1": 0.9958,
+      "spoof_roc_auc": 1.0
+    },
+    {
+      "epoch": 7,
+      "train_loss": 0.1997,
+      "val_loss": 0.1799,
+      "macro_f1": 0.9958,
+      "spoof_roc_auc": 1.0
+    },
+    {
+      "epoch": 8,
+      "train_loss": 0.1913,
+      "val_loss": 0.1744,
+      "macro_f1": 1.0,
+      "spoof_roc_auc": 1.0
+    },
+    {
+      "epoch": 9,
+      "train_loss": 0.194,
+      "val_loss": 0.1788,
+      "macro_f1": 1.0,
+      "spoof_roc_auc": 1.0
+    },
+    {
+      "epoch": 10,
+      "train_loss": 0.1855,
+      "val_loss": 0.1746,
+      "macro_f1": 1.0,
+      "spoof_roc_auc": 1.0
+    },
+    {
+      "epoch": 11,
+      "train_loss": 0.1872,
+      "val_loss": 0.1751,
+      "macro_f1": 1.0,
+      "spoof_roc_auc": 1.0
+    },
+    {
+      "epoch": 12,
+      "train_loss": 0.1794,
+      "val_loss": 0.2442,
+      "macro_f1": 0.9917,
+      "spoof_roc_auc": 0.9938
+    }
+  ]
+}

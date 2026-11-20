@@ -45,6 +45,8 @@ from ..database import (
     add_timeline_event,
     log_audit_event,
     delete_claim_record,
+    get_evidence_verification_by_id,
+    update_evidence_verification_record,
 )
 from ..dossier_engine import (
     generate_claim_dossier_and_report,
@@ -52,10 +54,12 @@ from ..dossier_engine import (
     render_dossier_pdf_bytes,
     render_localized_dossier_html,
 )
+from ..providers.conversation import process_conversational_turn
 from ..providers.transcription import (
     MockTranscriptionProvider,
     detect_conversation_language,
     extract_claim_fields,
+    extract_multimodal_slots,
     generate_assistant_dialogue,
     validate_and_normalize_field_answer,
 )
@@ -81,30 +85,39 @@ async def transcribe_audio(request: TranscriptRequest):
 @router.post("/extract-text")
 async def extract_text_intake(payload: dict):
     """
-    Phase 2 & 3 Multilingual Text Intake:
-    Extracts structured claim fields and generates conversational follow-up prompts
-    using the backend NLP extraction engine.
+    Phase 2 & 3 Stateful Multilingual Intake:
+    Extracts structured claim fields and generates natural, context-aware conversational
+    replies without re-asking already captured details.
     """
     text = (payload.get("text") or "").strip()
     language_hint = payload.get("language") or "indic-auto"
+    known_fields = payload.get("known_fields")
+    history = payload.get("history")
+    expected_field = payload.get("expected_field")
     if not text:
         raise HTTPException(status_code=400, detail="Incident description text is required.")
-    resolved_lang = detect_conversation_language(text, language_hint)
-    fields, missing = extract_claim_fields(text)
-    dialogue_info = generate_assistant_dialogue(
-        transcript=text,
-        fields=fields,
-        missing_fields=missing,
-        detected_language=resolved_lang,
+
+    conv = await process_conversational_turn(
+        message=text,
+        language=language_hint,
+        known_fields=known_fields if isinstance(known_fields, dict) else None,
+        history=history if isinstance(history, list) else None,
+        expected_field=expected_field,
     )
     return {
         "transcript": text,
-        "detected_language": dialogue_info["language"],
-        "fields": [f.model_dump() for f in fields],
-        "missing_fields": missing,
-        "assistant_dialogue": dialogue_info["display_text"],
-        "assistant_speech_text": dialogue_info["speech_text"],
-        "assistant_language": dialogue_info["language"],
+        "detected_language": conv["assistant_language"],
+        "fields": [f.model_dump() for f in conv["fields"]],
+        "missing_fields": conv["missing_fields"],
+        "known_fields": conv["known_fields"],
+        "assistant_dialogue": conv["reply_text"],
+        "assistant_speech_text": conv["reply_text"],
+        "assistant_language": conv["assistant_language"],
+        "claimed_vehicle_type": conv.get("claimed_vehicle_type"),
+        "vehicle_registration": conv.get("vehicle_registration"),
+        "damage_keywords": conv.get("damage_keywords", []),
+        "incident_description": conv.get("incident_description"),
+        "is_complete": conv["is_complete"],
     }
 
 
@@ -142,6 +155,21 @@ async def create_claim(
     now = datetime.now(timezone.utc)
     cs_id = await generate_next_cs_claim_id()
 
+    # Sprint 1.8: Evidence Validation Gatekeeper for Claim Creation
+    ev_record = None
+    if request.evidence_id:
+        ev_record = await get_evidence_verification_by_id(request.evidence_id)
+        if not ev_record:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Evidence verification '{request.evidence_id}' not found.",
+            )
+        if ev_record["decision"] == "REJECT":
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot submit a claim with REJECTED evidence.",
+            )
+
     # If authorization header passed, ensure current_user is valid
     if current_user:
         effective_customer_id = current_user["sub"]
@@ -157,6 +185,13 @@ async def create_claim(
         effective_customer_id = request.customer_id or "USR-100001"
         primary_id = cs_id if request.customer_id else f"DEMO-{uuid4().hex[:8].upper()}"
 
+    damage_desc = request.damage_description
+    if ev_record:
+        cost_est = ev_record.get("cost_estimate") or {}
+        tot = cost_est.get("total_estimated_inr", 0)
+        if tot > 0 and "Verified AI Estimate" not in damage_desc:
+            damage_desc += f" (Verified AI Estimate: INR {tot:,})"
+
     record = ClaimRecord(
         id=primary_id,
         customer_id=effective_customer_id,
@@ -167,7 +202,7 @@ async def create_claim(
         incident_location=request.incident_location,
         incident_date=request.incident_date,
         vehicle_type=request.vehicle_type,
-        damage_description=request.damage_description,
+        damage_description=damage_desc,
         people_involved=request.people_involved or "Policyholder (Driver)",
         injuries_reported=request.injuries_reported or "No physical injuries reported",
         detailed_statement=request.detailed_statement or "",
@@ -179,6 +214,32 @@ async def create_claim(
         updated_at=now,
     )
     await insert_claim(record, conversation_turns=request.conversation_turns)
+
+    # Bind linked_claim to evidence verification record
+    if request.evidence_id and ev_record:
+        cost_est = ev_record.get("cost_estimate") or {}
+        linked_claim = {
+            "claim_id": record.id,
+            "evidence_id": request.evidence_id,
+            "policy_number": record.policy_reference,
+            "vehicle_registration": record.policy_reference,
+            "vehicle_category": ev_record.get("claimed_vehicle_type", "four_wheeler"),
+            "verification_decision": ev_record["decision"],
+            "estimate_status": cost_est.get("estimate_status"),
+            "total_estimated_inr": cost_est.get("total_estimated_inr", 0),
+            "damage_count": ev_record.get("damage_count", 0),
+            "claim_status": "APPROVED" if ev_record["decision"] == "PASS" else "UNDER_REVIEW",
+            "created_at": now.isoformat(),
+        }
+        stage_results = dict(ev_record.get("stage_results") or {})
+        stage_results["linked_claim"] = linked_claim
+        await update_evidence_verification_record(
+            verification_id=request.evidence_id,
+            decision=ev_record["decision"],
+            stage_results=stage_results,
+            reasons=ev_record.get("reasons") or [],
+        )
+
     await log_audit_event(
         user_id=effective_customer_id,
         action="CLAIM_CREATED",
@@ -307,11 +368,63 @@ async def update_claim_details(
     """
     Update or confirm claim details during customer review (Step 6 of product flow).
     Strictly verifies that the caller owns the claim.
+    Enforces evidence verification decision checks (Sprint 1.8).
     """
     user_id = current_user.get("sub") if current_user else claim.customer_id
-    updates = {k: v for k, v in request.model_dump().items() if v is not None}
+
+    # Sprint 1.8: Evidence Validation Gatekeeper for Claim Updates
+    ev_record = None
+    if request.evidence_id:
+        ev_record = await get_evidence_verification_by_id(request.evidence_id)
+        if not ev_record:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Evidence verification '{request.evidence_id}' not found.",
+            )
+        if ev_record["decision"] == "REJECT":
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot submit a claim with REJECTED evidence.",
+            )
+
+    valid_cols = {
+        "policy_reference", "insurer_name", "policy_type", "incident_location",
+        "incident_date", "vehicle_type", "damage_description", "people_involved",
+        "injuries_reported", "detailed_statement", "customer_confirmation",
+    }
+    updates = {k: v for k, v in request.model_dump().items() if v is not None and k in valid_cols}
     if "customer_confirmation" in updates:
         updates["customer_confirmation"] = int(bool(updates["customer_confirmation"]))
+
+    if request.evidence_id and ev_record:
+        cost_est = ev_record.get("cost_estimate") or {}
+        tot = cost_est.get("total_estimated_inr", 0)
+        if tot > 0 and updates.get("damage_description"):
+            if "Verified AI Estimate" not in updates["damage_description"]:
+                updates["damage_description"] += f" (Verified AI Estimate: INR {tot:,})"
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        linked_claim = {
+            "claim_id": claim_id,
+            "evidence_id": request.evidence_id,
+            "policy_number": updates.get("policy_reference") or claim.policy_reference,
+            "vehicle_registration": updates.get("policy_reference") or claim.policy_reference,
+            "vehicle_category": ev_record.get("claimed_vehicle_type", "four_wheeler"),
+            "verification_decision": ev_record["decision"],
+            "estimate_status": cost_est.get("estimate_status"),
+            "total_estimated_inr": tot,
+            "damage_count": ev_record.get("damage_count", 0),
+            "claim_status": "APPROVED" if ev_record["decision"] == "PASS" else "UNDER_REVIEW",
+            "created_at": now_iso,
+        }
+        stage_results = dict(ev_record.get("stage_results") or {})
+        stage_results["linked_claim"] = linked_claim
+        await update_evidence_verification_record(
+            verification_id=request.evidence_id,
+            decision=ev_record["decision"],
+            stage_results=stage_results,
+            reasons=ev_record.get("reasons") or [],
+        )
 
     updated = await update_claim_record(claim_id, updates)
     await add_timeline_event(

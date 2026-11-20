@@ -8,7 +8,12 @@ class Settings(BaseSettings):
     app_env: str = "development"
     app_port: int = 8080
     database_url: str = "sqlite:///./claimsathi.db"
-    cors_origins: List[str] = ["http://localhost:5173", "http://localhost:3000"]
+    cors_origins: List[str] = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
 
     # Authentication & Secrets
     claimsathi_jwt_secret: Optional[str] = None
@@ -45,6 +50,12 @@ class Settings(BaseSettings):
     # Audio constraints
     max_audio_duration_seconds: float = 30.0
     max_audio_upload_size_bytes: int = 25 * 1024 * 1024  # 25 MB
+
+    # Optional Conversational LLM (OpenAI-compatible / Gemini / Ollama endpoint)
+    llm_api_url: Optional[str] = None
+    llm_api_key: Optional[str] = None
+    llm_model: Optional[str] = None
+    llm_timeout_seconds: float = 4.5
 
     model_config = SettingsConfigDict(
         env_file=".env",

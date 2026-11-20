@@ -5,6 +5,7 @@ import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import NewClaim from './pages/NewClaim'
 import ClaimDetail from './pages/ClaimDetail'
+import EvidenceVerify from './pages/EvidenceVerify'
 
 export default function App() {
   return (
@@ -16,6 +17,7 @@ export default function App() {
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/claims/new" element={<NewClaim />} />
           <Route path="/claims/:id" element={<ClaimDetail />} />
+          <Route path="/evidence-verify" element={<EvidenceVerify />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

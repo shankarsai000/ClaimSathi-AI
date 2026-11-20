@@ -1,0 +1,97 @@
+[
+  {
+    "file": "01_genuine_pass/genuine_car_01.jpg",
+    "expected_decision": "PASS",
+    "reason": "Genuine CarDD vehicle damage image"
+  },
+  {
+    "file": "01_genuine_pass/genuine_car_02.jpg",
+    "expected_decision": "PASS",
+    "reason": "Genuine CarDD vehicle damage image"
+  },
+  {
+    "file": "01_genuine_pass/genuine_car_03.jpg",
+    "expected_decision": "PASS",
+    "reason": "Genuine CarDD vehicle damage image"
+  },
+  {
+    "file": "01_genuine_pass/genuine_car_04.jpg",
+    "expected_decision": "PASS",
+    "reason": "Genuine CarDD vehicle damage image"
+  },
+  {
+    "file": "01_genuine_pass/genuine_car_05.jpg",
+    "expected_decision": "PASS",
+    "reason": "Genuine CarDD vehicle damage image"
+  },
+  {
+    "file": "02_screen_recapture_review/screen_spoof_01.jpg",
+    "expected_decision": "REVIEW",
+    "reason": "Screen recapture artifact"
+  },
+  {
+    "file": "02_screen_recapture_review/screen_spoof_02.jpg",
+    "expected_decision": "REVIEW",
+    "reason": "Screen recapture artifact"
+  },
+  {
+    "file": "02_screen_recapture_review/screen_spoof_03.jpg",
+    "expected_decision": "REVIEW",
+    "reason": "Screen recapture artifact"
+  },
+  {
+    "file": "02_screen_recapture_review/screen_spoof_04.jpg",
+    "expected_decision": "REVIEW",
+    "reason": "Screen recapture artifact"
+  },
+  {
+    "file": "02_screen_recapture_review/screen_spoof_05.jpg",
+    "expected_decision": "REVIEW",
+    "reason": "Screen recapture artifact"
+  },
+  {
+    "file": "03_manipulated_review/manipulated_car_01.jpg",
+    "expected_decision": "REVIEW",
+    "reason": "Manipulated/spliced image artifact"
+  },
+  {
+    "file": "03_manipulated_review/manipulated_car_02.jpg",
+    "expected_decision": "REVIEW",
+    "reason": "Manipulated/spliced image artifact"
+  },
+  {
+    "file": "03_manipulated_review/manipulated_car_03.jpg",
+    "expected_decision": "REVIEW",
+    "reason": "Manipulated/spliced image artifact"
+  },
+  {
+    "file": "03_manipulated_review/manipulated_car_04.jpg",
+    "expected_decision": "REVIEW",
+    "reason": "Manipulated/spliced image artifact"
+  },
+  {
+    "file": "03_manipulated_review/manipulated_car_05.jpg",
+    "expected_decision": "REVIEW",
+    "reason": "Manipulated/spliced image artifact"
+  },
+  {
+    "file": "04_no_vehicle_review/non_vehicle_texture_01.jpg",
+    "expected_decision": "REVIEW",
+    "reason": "No vehicle or damage detected"
+  },
+  {
+    "file": "04_no_vehicle_review/non_vehicle_texture_02.jpg",
+    "expected_decision": "REVIEW",
+    "reason": "No vehicle or damage detected"
+  },
+  {
+    "file": "05_corrupted_reject/corrupted_payload.jpg",
+    "expected_decision": "REJECT",
+    "reason": "Invalid MIME/header signature"
+  },
+  {
+    "file": "05_corrupted_reject/empty_file.jpg",
+    "expected_decision": "REJECT",
+    "reason": "Zero-byte upload"
+  }
+]

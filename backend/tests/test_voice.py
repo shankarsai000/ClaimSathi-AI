@@ -328,3 +328,97 @@ async def test_api_key_not_leaked_in_responses(monkeypatch):
     assert secret_key not in resp.text
     for h_name, h_val in resp.headers.items():
         assert secret_key not in h_val
+
+
+@pytest.mark.anyio
+async def test_conversational_turn_remembers_bike_number_and_avoids_reasking():
+    """
+    Verify stateful multi-turn conversation remembers already-provided slots
+    (such as bike registration & date) and never re-asks or emits hardcoded demo plates.
+    """
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Turn 1: User gives date, vehicle type, and space-separated KL plate
+        t1_resp = await client.post(
+            "/api/v1/voice/converse",
+            json={
+                "message": "An accident happened on 18th November, my bike number is KL 07 AB 1234",
+                "language": "en-IN",
+                "known_fields": {},
+                "history": [],
+            },
+        )
+        assert t1_resp.status_code == 200
+        t1 = t1_resp.json()
+
+        t1_fields = {f["name"]: f["value"] for f in t1["fields"]}
+        assert t1_fields["policy_reference"] == "KL-07-AB-1234"
+        assert t1_fields["vehicle_type"] and "bike" in t1_fields["vehicle_type"].lower()
+        assert t1["claimed_vehicle_type"] == "two_wheeler"
+        assert "18" in (t1_fields["incident_date"] or "") and "November" in (t1_fields["incident_date"] or "")
+        assert "policy_reference" not in t1["missing_fields"]
+        assert "vehicle_type" not in t1["missing_fields"]
+        assert "incident_date" not in t1["missing_fields"]
+        assert t1["is_complete"] is False
+
+        # Must not re-ask for bike/registration number or emit hardcoded demo plates
+        reply1_lower = t1["reply_text"].lower()
+        assert "registration number" not in reply1_lower or "kl-07-ab-1234" in reply1_lower
+        for banned in ("ka-17-ea-4590", "ts-09-ea-4590", "mot-2024-ts-98765", "ka-01-mj-2026"):
+            assert banned not in reply1_lower
+
+        # Turn 2: User provides remaining location and damage
+        t2_resp = await client.post(
+            "/api/v1/voice/converse",
+            json={
+                "message": "near Indiranagar, headlamp broke",
+                "language": "en-IN",
+                "known_fields": t1_fields,
+                "history": [
+                    {"sender": "user", "text": "An accident happened on 18th November, my bike number is KL 07 AB 1234"},
+                    {"sender": "assistant", "text": t1["reply_text"]},
+                ],
+                "expected_field": t1["missing_fields"][0] if t1["missing_fields"] else None,
+            },
+        )
+        assert t2_resp.status_code == 200
+        t2 = t2_resp.json()
+
+        t2_fields = {f["name"]: f["value"] for f in t2["fields"]}
+        assert t2_fields["policy_reference"] == "KL-07-AB-1234"
+        assert t2_fields["vehicle_type"] and "bike" in t2_fields["vehicle_type"].lower()
+        assert "18" in (t2_fields["incident_date"] or "")
+        assert t2_fields["incident_location"] and "indiranagar" in t2_fields["incident_location"].lower()
+        assert t2_fields["damage_description"] and (
+            "headlight" in t2_fields["damage_description"].lower()
+            or "headlamp" in t2_fields["damage_description"].lower()
+        )
+        assert t2["missing_fields"] == []
+        assert t2["is_complete"] is True
+        assert t2["vehicle_registration"] == "KL-07-AB-1234"
+        assert t2["claimed_vehicle_type"] == "two_wheeler"
+
+
+@pytest.mark.anyio
+async def test_extract_text_respects_known_fields_state():
+    """Verify /api/claims/extract-text preserves known_fields across turns."""
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/claims/extract-text",
+            json={
+                "text": "Today morning near Kochi metro pillar, front fender cracked",
+                "language": "en-IN",
+                "known_fields": {
+                    "policy_reference": "KL-01-CD-9876",
+                    "vehicle_type": "Two-Wheeler (Bike)",
+                },
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        fields_map = {f["name"]: f["value"] for f in data["fields"]}
+        assert fields_map["policy_reference"] == "KL-01-CD-9876"
+        assert fields_map["vehicle_type"] == "Two-Wheeler (Bike)"
+        assert fields_map["incident_date"] is not None
+        assert fields_map["incident_location"] and "kochi" in fields_map["incident_location"].lower()
+        assert fields_map["damage_description"] is not None
+        assert data["missing_fields"] == []

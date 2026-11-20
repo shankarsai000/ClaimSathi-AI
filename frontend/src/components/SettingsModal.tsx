@@ -33,8 +33,8 @@ export default function SettingsModal() {
       setName(u?.name || '')
       setPhone(u?.phone || '')
       setInsurer(u?.declared_insurer || 'Bharat General Insurance')
-      setPolicyNumber(localStorage.getItem('claimsathi_user_policy') || 'CS-2026-000085')
-      setVehicleReg(localStorage.getItem('claimsathi_user_vehicle_reg') || 'KA-17-EA-4590')
+      setPolicyNumber(localStorage.getItem('claimsathi_user_policy') || '')
+      setVehicleReg(localStorage.getItem('claimsathi_user_vehicle_reg') || '')
       setSavedNotice(false)
     }
   }, [isSettingsOpen])
@@ -53,8 +53,8 @@ export default function SettingsModal() {
       setStoredAuth(token, updatedUser)
       setUser(updatedUser)
     }
-    localStorage.setItem('claimsathi_user_policy', policyNumber.trim() || 'CS-2026-000085')
-    localStorage.setItem('claimsathi_user_vehicle_reg', vehicleReg.trim() || 'KA-17-EA-4590')
+    localStorage.setItem('claimsathi_user_policy', policyNumber.trim())
+    localStorage.setItem('claimsathi_user_vehicle_reg', vehicleReg.trim())
     setSavedNotice(true)
     setTimeout(() => setSavedNotice(false), 2500)
   }

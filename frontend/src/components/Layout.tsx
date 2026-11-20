@@ -39,42 +39,48 @@ export default function Layout() {
   const navItems = [
     { to: '/dashboard', label: t('nav_vault'), icon: LayoutDashboard },
     { to: '/claims/new', label: t('nav_new_claim'), icon: PlusCircle },
+    { to: '/evidence-verify', label: 'Evidence & Instant Estimate', icon: Shield },
   ]
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-50/60">
-      {/* Header */}
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-30 shadow-xs">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      {/* Header - Fixed Viewport Collision & Clean 3-Zone Flex Nav */}
+      <header className="bg-white border-b border-gray-200 sticky top-0 z-40 shadow-xs box-border px-4 sm:px-6 py-3 min-h-[68px] no-print">
+        <div className="max-w-[1440px] mx-auto flex items-center justify-between gap-3 flex-wrap lg:flex-nowrap">
+          {/* Left Zone: Brand */}
           <Link to="/dashboard" className="flex items-center gap-2 shrink-0">
-            <Shield className="w-7 h-7 text-brand-600" />
+            <div className="w-9 h-9 rounded-xl bg-brand-50 flex items-center justify-center border border-brand-100">
+              <Shield className="w-5 h-5 text-brand-600" />
+            </div>
             <div>
-              <span className="text-xl font-bold text-brand-900">
+              <span className="text-lg sm:text-xl font-bold tracking-tight text-brand-900">
                 ClaimSathi <span className="text-brand-500">AI</span>
               </span>
             </div>
           </Link>
 
-          <div className="flex items-center gap-2 sm:gap-2.5 flex-wrap justify-end">
-            <nav className="flex items-center gap-1">
-              {navItems.map(({ to, label, icon: Icon }) => (
-                <Link
-                  key={to}
-                  to={to}
-                  className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
-                    pathname.startsWith(to)
-                      ? 'bg-brand-50 text-brand-700'
-                      : 'text-gray-600 hover:bg-gray-100'
-                  }`}
-                >
-                  <Icon className="w-4 h-4" />
-                  <span className="hidden md:inline">{label}</span>
-                </Link>
-              ))}
-            </nav>
+          {/* Center Zone: Main Navigation Tabs */}
+          <nav className="flex items-center gap-1.5 sm:gap-2 shrink-0 order-3 lg:order-2 overflow-x-auto py-1 max-w-full">
+            {navItems.map(({ to, label, icon: Icon }) => (
+              <Link
+                key={to}
+                to={to}
+                className={`flex items-center gap-1.5 px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-lg text-xs sm:text-[13px] font-semibold whitespace-nowrap transition-all ${
+                  pathname.startsWith(to)
+                    ? 'bg-brand-50 text-brand-700 shadow-xs border border-brand-200/60'
+                    : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+                }`}
+              >
+                <Icon className="w-4 h-4 shrink-0" />
+                <span>{label}</span>
+              </Link>
+            ))}
+          </nav>
 
+          {/* Right Zone: Utility, User Badge & Actions */}
+          <div className="flex items-center gap-2 shrink-0 order-2 lg:order-3">
             {/* Quick App Language Switcher */}
-            <div className="inline-flex items-center gap-1 bg-blue-50/80 border border-blue-200 rounded-xl px-2.5 py-1">
+            <div className="inline-flex items-center gap-1 bg-blue-50/80 border border-blue-200 rounded-lg px-2.5 py-1.5 shrink-0">
               <Globe className="w-3.5 h-3.5 text-blue-600 shrink-0" />
               <select
                 value={appLanguage}
@@ -94,26 +100,28 @@ export default function Layout() {
             <button
               type="button"
               onClick={() => setIsSettingsOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-800 text-xs font-bold transition-colors border border-gray-200"
+              className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-800 text-xs font-bold transition-colors border border-gray-200 shrink-0"
               title={t('nav_settings')}
             >
-              <Settings className="w-3.5 h-3.5 text-brand-600" />
-              <span className="hidden sm:inline">{t('nav_settings')}</span>
+              <Settings className="w-3.5 h-3.5 text-brand-600 shrink-0" />
+              <span className="hidden xl:inline">{t('nav_settings')}</span>
             </button>
 
-            <div className="hidden lg:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold">
-              <UserCheck className="w-3.5 h-3.5 text-emerald-600" />
+            {/* User Badge */}
+            <div className="hidden md:inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold shrink-0">
+              <UserCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
               <span>{user.customer_id}</span>
-              <span className="text-emerald-600">&bull; {user.name}</span>
+              <span className="text-emerald-600 hidden xl:inline">&bull; {user.name}</span>
             </div>
 
+            {/* Sign Out Button */}
             <button
               type="button"
               onClick={handleLogout}
               title={t('nav_sign_out')}
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-gray-200 text-gray-600 text-xs font-semibold hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors"
+              className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 text-xs font-semibold hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors shrink-0"
             >
-              <LogOut className="w-3.5 h-3.5" />
+              <LogOut className="w-3.5 h-3.5 shrink-0" />
               <span className="hidden sm:inline">{t('nav_sign_out')}</span>
             </button>
           </div>

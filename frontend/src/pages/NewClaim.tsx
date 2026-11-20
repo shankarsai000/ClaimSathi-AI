@@ -7,6 +7,8 @@ import type {
   VoiceTranscribeResponse,
   CaptureSessionResponse,
   EvidenceAssetRecord,
+  EvidenceVerificationReport,
+  YoloDetectionBox,
 } from '../types'
 import ConfidenceBadge from '../components/ConfidenceBadge'
 import ProviderBadge from '../components/ProviderBadge'
@@ -36,6 +38,11 @@ import {
   Sparkles,
   Copy,
   RefreshCw,
+  RotateCcw,
+  Car,
+  Bike,
+  IndianRupee,
+  XCircle,
 } from 'lucide-react'
 
 interface MessageTurn {
@@ -65,6 +72,32 @@ const INDIAN_LANGUAGES = [
   { code: 'ur-IN', label: '🇮🇳 Urdu (ur-IN)' },
 ]
 
+const CODE_MIXED_LANGUAGE_PILLS = [
+  { key: 'auto', code: 'indic-auto', label: 'Auto / Hinglish' },
+  { key: 'hinglish', code: 'hi-Latn', label: 'Hinglish' },
+  { key: 'kanglish', code: 'kn-Latn', label: 'Kanglish' },
+  { key: 'english', code: 'en-IN', label: 'English (IN)' },
+  { key: 'hindi', code: 'hi-IN', label: 'हिंदी' },
+  { key: 'kannada', code: 'kn-IN', label: 'ಕನ್ನಡ' },
+  { key: 'tamil', code: 'ta-IN', label: 'தமிழ்' },
+  { key: 'telugu', code: 'te-IN', label: 'తెలుగు' },
+]
+
+function formatCategoryLabel(cat?: string) {
+  if (!cat) return 'Unknown'
+  if (cat === 'two_wheeler') return 'Two-Wheeler (Bike)'
+  if (cat === 'four_wheeler') return 'Four-Wheeler (Car)'
+  return cat
+}
+
+function formatInr(amount: number) {
+  return new Intl.NumberFormat('en-IN', {
+    style: 'currency',
+    currency: 'INR',
+    maximumFractionDigits: 0,
+  }).format(amount)
+}
+
 export default function NewClaim() {
   const navigate = useNavigate()
   const { t } = useAppSettings()
@@ -86,10 +119,10 @@ export default function NewClaim() {
   const [activeMissingIndex, setActiveMissingIndex] = useState(0)
   const [textIntakeInput, setTextIntakeInput] = useState('')
 
-  // Supplemental fields from Step 3 & 4 of PDF
-  const [vehicleRegistration, setVehicleRegistration] = useState('KA-17-EA-4590')
-  const [incidentTime, setIncidentTime] = useState('6:30 PM')
-  const [drivableStatus, setDrivableStatus] = useState('No (Requires towing / repair)')
+  // Supplemental fields populated cleanly from conversation (no fake defaults)
+  const [vehicleRegistration, setVehicleRegistration] = useState('')
+  const [incidentTime, setIncidentTime] = useState('')
+  const [drivableStatus, setDrivableStatus] = useState('')
   const [injuriesReported, setInjuriesReported] = useState('No injuries reported')
   const [policeFirInfo, setPoliceFirInfo] = useState('Not filed')
   const [declarationChecked, setDeclarationChecked] = useState(true)
@@ -99,16 +132,16 @@ export default function NewClaim() {
     {
       id: 'greeting',
       sender: 'assistant',
-      text: 'Namaste! Welcome to ClaimSathi AI. I am your multilingual claims officer. Please tell me what happened to your vehicle — you can speak naturally or type in Telugu, Kannada, Hindi, Tamil, or English. Mention your policy number, vehicle, location, date, and damage.',
-      audioText: 'Namaste! Welcome to ClaimSathi AI. Please tell me what happened to your vehicle. Mention your policy number, vehicle, location, and damage.',
+      text: 'Hello! I am ClaimSathi, your claims assistant. Tell me in your own words what happened to your vehicle — include whatever details you have like your bike or car number, where and when it happened, and what was damaged.',
+      audioText: 'Hello! I am ClaimSathi, your claims assistant. Tell me in your own words what happened to your vehicle.',
       language: 'en-IN',
       timestamp: 'Just now',
     },
   ])
 
-  // System & Environment state
+  // System & Environment state (Always live real-input mode; never mock scripts)
   const [error, setError] = useState('')
-  const [isDemoMode, setIsDemoMode] = useState(false)
+  const [isDemoMode] = useState(false)
   const [activeModel, setActiveModel] = useState<string>('prisma-v3.0')
   const [selectedLanguage, setSelectedLanguage] = useState<string>('indic-auto')
   const [lockedLanguage, setLockedLanguage] = useState<string | null>(null)
@@ -116,14 +149,74 @@ export default function NewClaim() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [hasStartedIntake, setHasStartedIntake] = useState(false)
 
+  // Live browser SpeechRecognition parallel capture (real-speech fallback if external STT fails)
+  const speechRecRef = useRef<any>(null)
+  const liveBrowserTranscriptRef = useRef<string>('')
+
+  const startBrowserSpeechCapture = (langHint?: string) => {
+    liveBrowserTranscriptRef.current = ''
+    if (typeof window === 'undefined') return
+    const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    if (!SpeechRec) return
+    try {
+      const rec = new SpeechRec()
+      rec.continuous = true
+      rec.interimResults = true
+      rec.lang = langHint && langHint !== 'indic-auto' ? normalizeApiLang(langHint) : 'en-IN'
+      rec.onresult = (event: any) => {
+        let combined = ''
+        for (let i = 0; i < event.results.length; i++) {
+          combined += event.results[i][0].transcript + ' '
+        }
+        liveBrowserTranscriptRef.current = combined.trim()
+      }
+      rec.onerror = () => {}
+      rec.start()
+      speechRecRef.current = rec
+    } catch {
+      speechRecRef.current = null
+    }
+  }
+
+  const stopBrowserSpeechCapture = (): string => {
+    if (speechRecRef.current) {
+      try {
+        speechRecRef.current.stop()
+      } catch {}
+      speechRecRef.current = null
+    }
+    return liveBrowserTranscriptRef.current.trim()
+  }
+
+  const getKnownFieldsMap = (sourceFields: ClaimField[] = fields): Record<string, string | null> => {
+    const out: Record<string, string | null> = {}
+    for (const f of sourceFields) {
+      out[f.name] = f.confidence !== 'missing' && f.value ? f.value : null
+    }
+    return out
+  }
+
+  const getHistoryPayload = (sourceMsgs: MessageTurn[] = messages): Array<{ sender: 'user' | 'assistant'; text: string }> =>
+    sourceMsgs
+      .filter((m) => !m.isStreaming && m.text)
+      .slice(-10)
+      .map((m) => ({ sender: m.sender, text: m.text }))
+
   // Resolve the active session language:
   // 1) If user manually selected a specific language, use it.
   // 2) If 'indic-auto' is selected and first turn locked a language, use lockedLanguage.
   // 3) Otherwise 'indic-auto' for initial detection.
+  const normalizeApiLang = (lang: string) =>
+    lang === 'hi-Latn' ? 'hi-IN' : lang === 'kn-Latn' ? 'kn-IN' : lang
+
   const effectiveSttLanguage =
-    selectedLanguage !== 'indic-auto' ? selectedLanguage : lockedLanguage || 'indic-auto'
+    selectedLanguage !== 'indic-auto'
+      ? normalizeApiLang(selectedLanguage)
+      : lockedLanguage
+      ? normalizeApiLang(lockedLanguage)
+      : 'indic-auto'
   const effectiveConversationLanguage =
-    selectedLanguage !== 'indic-auto' ? selectedLanguage : lockedLanguage || 'te-IN'
+    selectedLanguage !== 'indic-auto' ? selectedLanguage : lockedLanguage || 'en-IN'
 
   const lockLanguageFromFirstTurn = (detectedLang?: string) => {
     if (!detectedLang || detectedLang === 'indic-auto') return
@@ -183,6 +276,9 @@ export default function NewClaim() {
   const [isSynthesizing, setIsSynthesizing] = useState(false)
   const [isPlayingAudio, setIsPlayingAudio] = useState(false)
   const [activeSpeechText, setActiveSpeechText] = useState<string | null>(null)
+  const [lastSpokenSpeech, setLastSpokenSpeech] = useState<{ text: string; language?: string } | null>(null)
+  const [activePillKey, setActivePillKey] = useState<string>('auto')
+  const [evidenceNarration, setEvidenceNarration] = useState<{ spoken: string; lang: string } | null>(null)
 
   // Step 2: Evidence Collection & Guided Live Camera Capture state
   const [evidenceList, setEvidenceList] = useState<EvidenceAssetRecord[]>([])
@@ -193,23 +289,63 @@ export default function NewClaim() {
   const mediaStreamRef = useRef<MediaStream | null>(null)
   const evidenceInputRef = useRef<HTMLInputElement | null>(null)
 
+  // Sprint 1.8: 5-Stage AI Evidence Intelligence & INR Cost Estimator state
+  const [claimedVehicleType, setClaimedVehicleType] = useState<'four_wheeler' | 'two_wheeler'>('four_wheeler')
+  const [aiVerificationResult, setAiVerificationResult] = useState<EvidenceVerificationReport | null>(null)
+  const [isVerifyingEvidence, setIsVerifyingEvidence] = useState(false)
+  const [selectedEvidenceFile, setSelectedEvidenceFile] = useState<File | null>(null)
+  const [evidencePreviewUrl, setEvidencePreviewUrl] = useState<string | null>(null)
+
   // Conversation scroll container ref
   const chatScrollRef = useRef<HTMLDivElement | null>(null)
+
+  // Revoke object URL on unmount / change
+  useEffect(() => {
+    return () => {
+      if (evidencePreviewUrl) URL.revokeObjectURL(evidencePreviewUrl)
+    }
+  }, [evidencePreviewUrl])
+
+  // Synchronize claimed vehicle category from conversational vehicle_type field
+  useEffect(() => {
+    const vtField = (fields.find((f) => f.name === 'vehicle_type')?.value || '').toLowerCase()
+    if (
+      vtField.includes('bike') ||
+      vtField.includes('motorcycle') ||
+      vtField.includes('two wheeler') ||
+      vtField.includes('two-wheeler') ||
+      vtField.includes('2 wheeler') ||
+      vtField.includes('2-wheeler') ||
+      vtField.includes('scooter')
+    ) {
+      setClaimedVehicleType('two_wheeler')
+    } else if (
+      vtField.includes('car') ||
+      vtField.includes('sedan') ||
+      vtField.includes('suv') ||
+      vtField.includes('four wheeler') ||
+      vtField.includes('four-wheeler') ||
+      vtField.includes('4 wheeler') ||
+      vtField.includes('4-wheeler')
+    ) {
+      setClaimedVehicleType('four_wheeler')
+    }
+  }, [fields])
 
   useEffect(() => {
     api
       .health()
       .then((h) => {
         if (h.gnani_stt_model) setActiveModel(h.gnani_stt_model)
-        setIsDemoMode(!h.gnani_configured)
       })
       .catch(() => {
-        setIsDemoMode(true)
+        // Keep real input mode even if health probe fails temporarily
       })
 
     return () => {
       stopAudio()
       stopLiveCamera()
+      stopBrowserSpeechCapture()
       if (timerRef.current) clearInterval(timerRef.current)
       if (recorderRef.current) recorderRef.current.cancel()
       if (answerTimerRef.current) clearInterval(answerTimerRef.current)
@@ -223,32 +359,120 @@ export default function NewClaim() {
     }
   }, [messages, isRecording, isAnswerRecording])
 
-  // ── Speech Synthesis with Gnani Timbre ──
+  const [extractedSlotsSummary, setExtractedSlotsSummary] = useState<{
+    vehicleType?: 'two_wheeler' | 'four_wheeler' | null
+    registration?: string | null
+    damages?: string[]
+  } | null>(null)
+
+  const syncExtractedSlots = (slots: {
+    claimed_vehicle_type?: 'two_wheeler' | 'four_wheeler' | null
+    vehicle_registration?: string | null
+    policy_reference?: string | null
+    incident_date?: string | null
+    damage_keywords?: string[]
+    incident_description?: string | null
+  }) => {
+    if (slots.claimed_vehicle_type === 'two_wheeler' || slots.claimed_vehicle_type === 'four_wheeler') {
+      const vt = slots.claimed_vehicle_type
+      setClaimedVehicleType(vt)
+      setFields((prev) =>
+        prev.map((f) =>
+          f.name === 'vehicle_type' && (!f.value || f.confidence === 'missing')
+            ? { ...f, value: vt === 'two_wheeler' ? 'Two-Wheeler (Bike)' : 'Four-Wheeler (Car)', confidence: 'high' }
+            : f
+        )
+      )
+      setMissingFields((prev) => prev.filter((m) => m !== 'vehicle_type'))
+    }
+    const resolvedReg = slots.vehicle_registration || slots.policy_reference
+    if (resolvedReg) {
+      setVehicleRegistration((prev) => (slots.vehicle_registration ? slots.vehicle_registration : prev || resolvedReg))
+      setFields((prev) =>
+        prev.map((f) =>
+          f.name === 'policy_reference' && (!f.value || f.confidence === 'missing')
+            ? { ...f, value: resolvedReg, confidence: 'high' }
+            : f
+        )
+      )
+      setMissingFields((prev) => prev.filter((m) => m !== 'policy_reference'))
+    }
+    if (slots.incident_date) {
+      setIncidentTime((prev) => prev || slots.incident_date!)
+    }
+    if (slots.incident_description) {
+      setFields((prev) =>
+        prev.map((f) =>
+          f.name === 'damage_description' && (!f.value || f.confidence === 'missing')
+            ? { ...f, value: slots.incident_description!, confidence: 'high' }
+            : f
+        )
+      )
+      setMissingFields((prev) => prev.filter((m) => m !== 'damage_description'))
+    }
+    if (slots.claimed_vehicle_type || slots.vehicle_registration || (slots.damage_keywords && slots.damage_keywords.length > 0)) {
+      setExtractedSlotsSummary((prev) => ({
+        vehicleType: slots.claimed_vehicle_type || prev?.vehicleType || null,
+        registration: slots.vehicle_registration || prev?.registration || null,
+        damages: slots.damage_keywords?.length ? slots.damage_keywords : prev?.damages || [],
+      }))
+    }
+  }
+
+  const speakViaBrowserSpeech = (text: string, targetLang: string) => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return false
+    try {
+      window.speechSynthesis.cancel()
+      const utter = new SpeechSynthesisUtterance(text)
+      utter.lang = targetLang
+      utter.rate = 1.0
+      utter.onend = () => {
+        setIsPlayingAudio(false)
+        setActiveSpeechText(null)
+      }
+      utter.onerror = () => {
+        setIsPlayingAudio(false)
+        setActiveSpeechText(null)
+      }
+      setIsPlayingAudio(true)
+      window.speechSynthesis.speak(utter)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  // ── Speech Synthesis with Gnani Timbre + Browser speechSynthesis Fallback ──
   const speakText = async (text: string, langCode?: string) => {
     if (isPlayingAudio) {
       stopAudio()
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel()
+      }
       setIsPlayingAudio(false)
       setActiveSpeechText(null)
       return
     }
 
+    setLastSpokenSpeech({ text, language: langCode })
     setIsSynthesizing(true)
     setActiveSpeechText(text)
     setError('')
 
+    const code = (langCode || effectiveConversationLanguage || 'en-IN').toLowerCase()
+    const targetLang = code.startsWith('te')
+      ? 'te-IN'
+      : code.startsWith('kn')
+      ? 'kn-IN'
+      : code.startsWith('hi')
+      ? 'hi-IN'
+      : code.startsWith('ta')
+      ? 'ta-IN'
+      : code.startsWith('mr')
+      ? 'mr-IN'
+      : 'en-IN'
+
     try {
-      const code = langCode || effectiveConversationLanguage || 'en-IN'
-      const targetLang = code.startsWith('te')
-        ? 'te-IN'
-        : code.startsWith('kn')
-        ? 'kn-IN'
-        : code.startsWith('hi')
-        ? 'hi-IN'
-        : code.startsWith('ta')
-        ? 'ta-IN'
-        : code.startsWith('mr')
-        ? 'mr-IN'
-        : 'en-IN'
       const audioBlob = await api.synthesizeSpeech(text, {
         demo: isDemoMode,
         language: targetLang,
@@ -260,11 +484,114 @@ export default function NewClaim() {
       await playAudioBlob(audioBlob)
       setIsPlayingAudio(false)
       setActiveSpeechText(null)
-    } catch (err: any) {
+    } catch {
       setIsSynthesizing(false)
+      const spoke = speakViaBrowserSpeech(text, targetLang)
+      if (!spoke) {
+        setIsPlayingAudio(false)
+        setActiveSpeechText(null)
+      }
+    }
+  }
+
+  const handleReplayLastVoice = () => {
+    if (isPlayingAudio) {
+      stopAudio()
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel()
+      }
       setIsPlayingAudio(false)
       setActiveSpeechText(null)
-      setError(`Voice synthesis: ${err.message}`)
+      return
+    }
+    if (lastSpokenSpeech) {
+      speakText(lastSpokenSpeech.text, lastSpokenSpeech.language)
+    } else {
+      const lastMsg = [...messages].reverse().find((m) => m.sender === 'assistant' && (m.audioText || m.text))
+      if (lastMsg) {
+        speakText(lastMsg.audioText || lastMsg.text, lastMsg.language)
+      }
+    }
+  }
+
+  // ── Unified Stateful Conversation Updater ──
+  const applyConversationResult = (
+    res: {
+      transcript: string
+      detected_language?: string | null
+      assistant_language?: string | null
+      assistant_dialogue?: string | null
+      assistant_speech_text?: string | null
+      reply_text?: string | null
+      fields: ClaimField[]
+      missing_fields: string[]
+      model?: string
+      request_metadata?: { duration_seconds?: number; processing_time?: number }
+      claimed_vehicle_type?: 'two_wheeler' | 'four_wheeler' | null
+      vehicle_registration?: string | null
+      damage_keywords?: string[]
+      incident_description?: string | null
+    },
+    procTurnId?: string,
+  ) => {
+    const detectedLang =
+      res.assistant_language ||
+      res.detected_language ||
+      (selectedLanguage !== 'indic-auto' ? selectedLanguage : 'en-IN')
+
+    lockLanguageFromFirstTurn(detectedLang)
+
+    setTranscript((prev) => (prev ? `${prev} ${res.transcript}` : res.transcript))
+    const { merged, remainingMissing } = mergeExtractedFields(fields, res.fields)
+    setFields(merged)
+    setMissingFields(remainingMissing)
+    if (res.model) setActiveModel(res.model)
+    setActiveMissingIndex(0)
+
+    syncExtractedSlots({
+      claimed_vehicle_type: res.claimed_vehicle_type,
+      vehicle_registration: res.vehicle_registration,
+      policy_reference: merged.find((f) => f.name === 'policy_reference')?.value || null,
+      incident_date: merged.find((f) => f.name === 'incident_date')?.value || null,
+      damage_keywords: res.damage_keywords,
+      incident_description: res.incident_description,
+    })
+
+    const userTurn: MessageTurn = {
+      id: 'user-' + Date.now(),
+      sender: 'user',
+      text: res.transcript,
+      language: detectedLang,
+      audioDuration: res.request_metadata?.duration_seconds,
+      latencyMs: res.request_metadata?.processing_time
+        ? Math.round(res.request_metadata.processing_time * 1000)
+        : undefined,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    }
+
+    const assistantText =
+      res.reply_text ||
+      res.assistant_dialogue ||
+      'Thank you, I have noted those details.'
+    const assistantSpeech = res.assistant_speech_text || assistantText
+
+    const assistantTurn: MessageTurn = {
+      id: 'assistant-' + Date.now(),
+      sender: 'assistant',
+      text: assistantText,
+      audioText: assistantSpeech,
+      language: detectedLang,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    }
+
+    setMessages((prev) => [
+      ...(procTurnId ? prev.filter((m) => m.id !== procTurnId) : prev),
+      userTurn,
+      assistantTurn,
+    ])
+
+    if (autoVoiceEnabled && assistantSpeech) {
+      setTimeout(() => speakText(assistantSpeech, detectedLang), 300)
     }
   }
 
@@ -276,6 +603,7 @@ export default function NewClaim() {
       const recorder = new WavRecorder(16000, (vol) => setAudioVolume(vol))
       recorderRef.current = recorder
       await recorder.start()
+      startBrowserSpeechCapture(effectiveSttLanguage)
 
       setIsRecording(true)
       setRecordingSeconds(0)
@@ -300,6 +628,7 @@ export default function NewClaim() {
       clearInterval(timerRef.current)
       timerRef.current = null
     }
+    const browserCapturedText = stopBrowserSpeechCapture()
 
     if (!recorderRef.current) return
     setIsRecording(false)
@@ -307,7 +636,7 @@ export default function NewClaim() {
     try {
       const audioBlob = await recorderRef.current.stop()
       recorderRef.current = null
-      await handleProcessMainAudio(audioBlob, 'recording.wav')
+      await handleProcessMainAudio(audioBlob, 'recording.wav', browserCapturedText)
     } catch (err: any) {
       setError(err.message || 'Failed to capture recorded audio.')
     }
@@ -318,6 +647,7 @@ export default function NewClaim() {
       clearInterval(timerRef.current)
       timerRef.current = null
     }
+    stopBrowserSpeechCapture()
     if (recorderRef.current) {
       recorderRef.current.cancel()
       recorderRef.current = null
@@ -334,8 +664,12 @@ export default function NewClaim() {
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
-  // ── Process Spoken Intake with Gnani Prisma STT ──
-  const handleProcessMainAudio = async (blob: Blob | File, filename: string) => {
+  // ── Process Spoken Intake with Live Gnani STT + Stateful Conversation ──
+  const handleProcessMainAudio = async (
+    blob: Blob | File,
+    filename: string,
+    browserFallbackTranscript: string = '',
+  ) => {
     setError('')
     setHasStartedIntake(true)
 
@@ -345,71 +679,51 @@ export default function NewClaim() {
       {
         id: procTurnId,
         sender: 'assistant',
-        text: 'Transcribing your speech with Gnani Prisma and extracting vehicle, policy, location, date, and damage details...',
+        text: 'Listening and understanding your details...',
         timestamp: 'Just now',
         isStreaming: true,
       },
     ])
 
+    const knownMap = getKnownFieldsMap()
+    const historyList = getHistoryPayload()
+    const expectedField = missingFields.length > 0 ? missingFields[activeMissingIndex] : null
+
     try {
       const data: VoiceTranscribeResponse = await api.transcribeVoice(
         blob,
         filename,
-        isDemoMode,
+        false,
         effectiveSttLanguage,
+        knownMap,
+        historyList,
+        expectedField,
       )
-
-      const detectedLang =
-        data.assistant_language ||
-        data.detected_language ||
-        (selectedLanguage !== 'indic-auto' ? selectedLanguage : 'te-IN')
-
-      // Lock onto the user's first spoken language for the entire conversation if 'indic-auto' was active
-      lockLanguageFromFirstTurn(detectedLang)
-
-      setTranscript((prev) => (prev ? `${prev} ${data.transcript}` : data.transcript))
-      const { merged, remainingMissing } = mergeExtractedFields(fields, data.fields)
-      setFields(merged)
-      setMissingFields(remainingMissing)
-      if (data.model) setActiveModel(data.model)
-      setActiveMissingIndex(0)
-
-      const userTurn: MessageTurn = {
-        id: 'user-' + Date.now(),
-        sender: 'user',
-        text: data.transcript,
-        language: detectedLang,
-        audioDuration: data.request_metadata?.duration_seconds,
-        latencyMs: data.request_metadata?.processing_time
-          ? Math.round(data.request_metadata.processing_time * 1000)
-          : undefined,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      }
-
-      const assistantText = data.assistant_dialogue || 'Thank you! I have processed your initial claim intake.'
-      const assistantSpeech = data.assistant_speech_text || assistantText
-
-      const assistantTurn: MessageTurn = {
-        id: 'assistant-' + Date.now(),
-        sender: 'assistant',
-        text: assistantText,
-        audioText: assistantSpeech,
-        language: detectedLang,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      }
-
-      setMessages((prev) => [...prev.filter((m) => m.id !== procTurnId), userTurn, assistantTurn])
-
-      if (autoVoiceEnabled && assistantSpeech) {
-        setTimeout(() => speakText(assistantSpeech, detectedLang), 350)
-      }
+      applyConversationResult(data, procTurnId)
     } catch (err: any) {
+      if (browserFallbackTranscript) {
+        try {
+          const conv = await api.converseClaimTurn({
+            message: browserFallbackTranscript,
+            language: effectiveSttLanguage,
+            known_fields: knownMap,
+            history: historyList,
+            expected_field: expectedField,
+          })
+          applyConversationResult(conv, procTurnId)
+          return
+        } catch (convErr: any) {
+          setMessages((prev) => prev.filter((m) => m.id !== procTurnId))
+          setError(convErr.message || 'Could not process voice input.')
+          return
+        }
+      }
       setMessages((prev) => prev.filter((m) => m.id !== procTurnId))
-      setError(err.message || 'Speech transcription failed.')
+      setError(err.message || 'Speech transcription failed. Please type your details below or retry speaking.')
     }
   }
 
-  // ── Process Typed / Sample Text Narrative (Step 2 & 3 of PDF) ──
+  // ── Process Typed Natural Conversation Turn ──
   const handleProcessTextIntake = async (customText?: string) => {
     const raw = (customText ?? textIntakeInput).trim()
     if (!raw) return
@@ -418,48 +732,20 @@ export default function NewClaim() {
     setTextIntakeInput('')
 
     try {
-      const data = await api.extractTextIntake(raw, effectiveSttLanguage)
-      const detectedLang =
-        data.assistant_language ||
-        data.detected_language ||
-        (selectedLanguage !== 'indic-auto' ? selectedLanguage : 'en-IN')
-
-      // Lock onto the user's first typed language for the entire conversation if 'indic-auto' was active
-      lockLanguageFromFirstTurn(detectedLang)
-
-      setTranscript((prev) => (prev ? `${prev} ${data.transcript}` : data.transcript))
-      const { merged, remainingMissing } = mergeExtractedFields(fields, data.fields)
-      setFields(merged)
-      setMissingFields(remainingMissing)
-      setActiveMissingIndex(0)
-
-      const userTurn: MessageTurn = {
-        id: 'user-txt-' + Date.now(),
-        sender: 'user',
-        text: data.transcript,
-        language: detectedLang,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      }
-
-      const assistantTurn: MessageTurn = {
-        id: 'ast-txt-' + Date.now(),
-        sender: 'assistant',
-        text: data.assistant_dialogue,
-        audioText: data.assistant_speech_text,
-        language: detectedLang,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      }
-
-      setMessages((prev) => [...prev, userTurn, assistantTurn])
-      if (autoVoiceEnabled && data.assistant_speech_text) {
-        setTimeout(() => speakText(data.assistant_speech_text, detectedLang), 350)
-      }
+      const data = await api.converseClaimTurn({
+        message: raw,
+        language: effectiveSttLanguage,
+        known_fields: getKnownFieldsMap(),
+        history: getHistoryPayload(),
+        expected_field: missingFields.length > 0 ? missingFields[activeMissingIndex] : null,
+      })
+      applyConversationResult(data)
     } catch (err: any) {
-      setError(err.message || 'Failed to extract fields from text.')
+      setError(err.message || 'Failed to process your message.')
     }
   }
 
-  // ── Missing Field Voice Recording ──
+  // ── Follow-Up Voice Recording ──
   const startAnswerRecording = async () => {
     stopAudio()
     setError('')
@@ -467,6 +753,7 @@ export default function NewClaim() {
       const recorder = new WavRecorder(16000, (vol) => setAudioVolume(vol))
       answerRecorderRef.current = recorder
       await recorder.start()
+      startBrowserSpeechCapture(effectiveSttLanguage)
 
       setIsAnswerRecording(true)
       setAnswerRecordingSeconds(0)
@@ -491,32 +778,61 @@ export default function NewClaim() {
       clearInterval(answerTimerRef.current)
       answerTimerRef.current = null
     }
+    const browserCaptured = stopBrowserSpeechCapture()
     if (!answerRecorderRef.current) return
 
     setIsAnswerRecording(false)
     setIsProcessingAnswerVoice(true)
 
-    try {
-      const blob = await answerRecorderRef.current.stop()
-      answerRecorderRef.current = null
+    const knownMap = getKnownFieldsMap()
+    const historyList = getHistoryPayload()
+    const expectedField = missingFields[activeMissingIndex] || null
 
+    try {
       const resp = await api.transcribeVoice(
-        blob,
+        await answerRecorderRef.current.stop(),
         'answer.wav',
-        isDemoMode,
+        false,
         effectiveSttLanguage,
+        knownMap,
+        historyList,
+        expectedField,
       )
+      answerRecorderRef.current = null
       setIsProcessingAnswerVoice(false)
 
-      const answerText = (resp.transcript || '').trim()
-      if (answerText) {
-        handleApplyAnswer(answerText, 'voice', resp.fields, resp.detected_language)
+      if ((resp.transcript || '').trim()) {
+        applyConversationResult(resp)
+      } else if (browserCaptured) {
+        const conv = await api.converseClaimTurn({
+          message: browserCaptured,
+          language: effectiveSttLanguage,
+          known_fields: knownMap,
+          history: historyList,
+          expected_field: expectedField,
+        })
+        applyConversationResult(conv)
       } else {
-        setError('No speech detected in your answer. Please tap mic again or type in the box.')
+        setError('No speech detected in your answer. Please tap mic again or type below.')
       }
     } catch (err: any) {
+      answerRecorderRef.current = null
+      if (browserCaptured) {
+        try {
+          const conv = await api.converseClaimTurn({
+            message: browserCaptured,
+            language: effectiveSttLanguage,
+            known_fields: knownMap,
+            history: historyList,
+            expected_field: expectedField,
+          })
+          setIsProcessingAnswerVoice(false)
+          applyConversationResult(conv)
+          return
+        } catch {}
+      }
       setIsProcessingAnswerVoice(false)
-      setError(err.message || 'Failed to process voice answer.')
+      setError(err.message || 'Failed to process voice answer. Please type below or retry.')
     }
   }
 
@@ -525,6 +841,7 @@ export default function NewClaim() {
       clearInterval(answerTimerRef.current)
       answerTimerRef.current = null
     }
+    stopBrowserSpeechCapture()
     if (answerRecorderRef.current) {
       answerRecorderRef.current.cancel()
       answerRecorderRef.current = null
@@ -533,189 +850,32 @@ export default function NewClaim() {
     setAnswerRecordingSeconds(0)
   }
 
-  const getCompletionMessageByLang = (lang: string): { display: string; speech: string } => {
-    if (lang.startsWith('te')) {
-      const msg =
-        'ధన్యవాదాలు! మీ క్లెయిమ్ కి సంబంధించిన అన్ని 5 వివరాలు విజయవంతంగా నమోదయ్యాయి. ఇప్పుడు స్టెప్ 2 కి వెళ్లి వాహన డ్యామేజ్ ఫోటోలు లేదా వీడియోలు అప్లోడ్ చేయండి.'
-      return { display: msg, speech: msg }
-    }
-    if (lang.startsWith('kn')) {
-      const msg =
-        'ಧನ್ಯವಾದಗಳು! ನಿಮ್ಮ ಕ್ಲೈಮ್‌ನ ಎಲ್ಲಾ 5 ವಿವರಗಳನ್ನು ದಾಖಲಿಸಲಾಗಿದೆ. ಈಗ ಹಂತ 2 ಕ್ಕೆ ಮುಂದುವರಿದು ವಾಹನದ ಹಾನಿಯ ಫೋಟೋಗಳನ್ನು ಅಪ್‌ಲೋಡ್ ಮಾಡಿ.'
-      return { display: msg, speech: msg }
-    }
-    if (lang.startsWith('hi')) {
-      const msg =
-        'धन्यवाद! आपके क्लेम के सभी 5 विवरण दर्ज हो चुके हैं। अब स्टेप 2 पर जाएं और वाहन डैमेज के फोटो या वीडियो अपलोड करें।'
-      return { display: msg, speech: msg }
-    }
-    if (lang.startsWith('ta')) {
-      const msg =
-        'நன்றி! உங்கள் கோரிக்கையின் அனைத்து 5 விவரங்களும் பதிவு செய்யப்பட்டுள்ளன. இப்போது படி 2 க்குச் சென்று வாகன சேதப் புகைப்படங்களைப் பதிவேற்றவும்.'
-      return { display: msg, speech: msg }
-    }
-    if (lang.startsWith('mr')) {
-      const msg =
-        'धन्यवाद! तुमच्या क्लेमचे सर्व 5 तपशील नोंदवले गेले आहेत. कृपया आता स्टेप 2 वर जाऊन वाहनाच्या नुकसानीचे फोटो अपलोड करा.'
-      return { display: msg, speech: msg }
-    }
-    const msg =
-      'Thank you! All 5 core claim details have been recorded. Now proceed to Step 2 to upload or live-capture vehicle damage photos/videos for Evidence Integrity Screening.'
-    return { display: msg, speech: msg }
-  }
-
-  const handleApplyAnswer = async (
-    value: string,
-    _source: 'voice' | 'text',
-    extractedAnswerFields?: ClaimField[],
-    answerDetectedLang?: string | null,
-  ) => {
-    const targetFieldName = missingFields[activeMissingIndex]
-    if (!targetFieldName) return
-
-    const activeLang =
-      selectedLanguage !== 'indic-auto'
-        ? selectedLanguage
-        : lockedLanguage || answerDetectedLang || 'te-IN'
-
-    const userAnsTurn: MessageTurn = {
-      id: 'ans-' + Date.now(),
-      sender: 'user',
-      text: value,
-      language: activeLang,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    }
-
+  const handleApplyAnswer = async (value: string) => {
+    const clean = (value || '').trim()
+    if (!clean) return
+    setError('')
     try {
-      // Strictly validate field type & normalize to English for insurer submission
-      const validation = await api.validateFieldAnswer(targetFieldName, value, activeLang)
-      const resolvedLang =
-        selectedLanguage !== 'indic-auto'
-          ? selectedLanguage
-          : lockedLanguage || validation.detected_language || activeLang
-
-      if (!lockedLanguage && selectedLanguage === 'indic-auto') {
-        lockLanguageFromFirstTurn(resolvedLang)
-      }
-
-      let updatedFields = [...fields]
-      if (extractedAnswerFields && extractedAnswerFields.length > 0) {
-        updatedFields = mergeExtractedFields(updatedFields, extractedAnswerFields).merged
-      }
-
-      // Apply any routed English fields detected in the user's answer (e.g. if user spoke KA-34-223 during location question, it routes KA-34-223 to policy_reference!)
-      if (validation.routed_fields && Object.keys(validation.routed_fields).length > 0) {
-        updatedFields = updatedFields.map((f) => {
-          const routedVal = validation.routed_fields[f.name]
-          if (routedVal) {
-            return { ...f, value: routedVal, confidence: 'high' as const, is_edited: false, follow_up_question: null }
-          }
-          return f
-        })
-      }
-
-      // If the user's input was NOT valid for the currently asked targetFieldName (e.g. they asked a question "ಸಿ ಎಂ ಎಂ ಅಂದರೆ ಏನು?" or gave a vehicle number instead of location)
-      if (!validation.is_valid_for_target || !validation.english_value) {
-        setFields(updatedFields)
-        const remainingNow = updatedFields
-          .filter((f) => f.confidence === 'missing' || !f.value)
-          .map((f) => f.name)
-        setMissingFields(remainingNow)
-        setActiveMissingIndex(0)
-
-        const errPrompt =
-          validation.error_prompt ||
-          `Please provide a valid ${targetFieldName.replace('_', ' ')}.`
-
-        const clarifyTurn: MessageTurn = {
-          id: 'clarify-' + Date.now(),
-          sender: 'assistant',
-          text: errPrompt,
-          audioText: errPrompt,
-          language: resolvedLang,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        }
-        setMessages((prev) => [...prev, userAnsTurn, clarifyTurn])
-        if (autoVoiceEnabled) {
-          setTimeout(() => speakText(errPrompt, resolvedLang), 350)
-        }
-        return
-      }
-
-      // Valid answer for targetFieldName -> store the clean English normalized value!
-      const finalEnglishValue = validation.english_value
-      updatedFields = updatedFields.map((f) =>
-        f.name === targetFieldName
-          ? { ...f, value: finalEnglishValue, confidence: 'high' as const, is_edited: false, follow_up_question: null }
-          : f,
-      )
-
-      const remaining = updatedFields
-        .filter((f) => f.confidence === 'missing' || !f.value)
-        .map((f) => f.name)
-
-      setFields(updatedFields)
-      setTranscript((prev) => (prev ? `${prev}. ${finalEnglishValue}` : finalEnglishValue))
-
-      if (remaining.length > 0) {
-        setMissingFields(remaining)
-        setActiveMissingIndex(0)
-        const nextFieldName = remaining[0]
-        const nextField = updatedFields.find((f) => f.name === nextFieldName)
-        const nextQ =
-          nextField?.follow_up_question || `Please provide the details for ${nextField?.label}.`
-
-        const ackPrefix = resolvedLang.startsWith('te')
-          ? `నమోదైంది ("${finalEnglishValue}"). తదుపరి ప్రశ్న:`
-          : resolvedLang.startsWith('kn')
-          ? `ದಾಖಲಾಗಿದೆ ("${finalEnglishValue}"). ಮುಂದಿನ ಪ್ರಶ್ನೆ:`
-          : resolvedLang.startsWith('hi')
-          ? `दर्ज किया गया ("${finalEnglishValue}")। अगला प्रश्न:`
-          : `Noted "${finalEnglishValue}". Next:`
-
-        const nextAssistantTurn: MessageTurn = {
-          id: 'ast-' + Date.now(),
-          sender: 'assistant',
-          text: `${ackPrefix} ${nextQ}`,
-          audioText: nextQ,
-          language: resolvedLang,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        }
-
-        setMessages((prev) => [...prev, userAnsTurn, nextAssistantTurn])
-        if (autoVoiceEnabled) {
-          setTimeout(() => speakText(nextQ, resolvedLang), 350)
-        }
-      } else {
-        setMissingFields([])
-        setActiveMissingIndex(0)
-        const comp = getCompletionMessageByLang(resolvedLang)
-
-        const completionTurn: MessageTurn = {
-          id: 'comp-' + Date.now(),
-          sender: 'assistant',
-          text: comp.display,
-          audioText: comp.speech,
-          language: resolvedLang,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        }
-
-        setMessages((prev) => [...prev, userAnsTurn, completionTurn])
-        if (autoVoiceEnabled) {
-          setTimeout(() => speakText(comp.speech, resolvedLang), 350)
-        }
-      }
+      const conv = await api.converseClaimTurn({
+        message: clean,
+        language: effectiveSttLanguage,
+        known_fields: getKnownFieldsMap(),
+        history: getHistoryPayload(),
+        expected_field: missingFields[activeMissingIndex] || null,
+      })
+      applyConversationResult(conv)
     } catch (err: any) {
-      setError(err.message || 'Failed to validate answer.')
+      setError(err.message || 'Failed to process answer.')
     }
   }
 
   const handleEditField = (name: string, value: string) => {
-    setFields((prev) =>
-      prev.map((f) =>
-        f.name === name ? { ...f, value, confidence: 'high' as const, is_edited: true } : f,
-      ),
-    )
+    setFields((prev) => {
+      const next = prev.map((f) =>
+        f.name === name ? { ...f, value, confidence: value.trim() ? ('high' as const) : ('missing' as const), is_edited: true } : f,
+      )
+      setMissingFields(next.filter((f) => f.confidence === 'missing' || !f.value).map((f) => f.name))
+      return next
+    })
   }
 
   // ── Transition from Step 1 (Conversation) -> Step 2 (Evidence Collection & Screening) ──
@@ -761,7 +921,73 @@ export default function NewClaim() {
     setWizardStep(2)
   }
 
-  // ── Step 2: Upload Photo / Video Evidence ──
+  // ── Step 2: 5-Stage AI Verification Pipeline & Legacy Upload ──
+  const runAiVerificationOnFile = async (
+    file: File,
+    overrideVehicleType?: 'four_wheeler' | 'two_wheeler',
+  ) => {
+    const vType = overrideVehicleType || claimedVehicleType
+    setSelectedEvidenceFile(file)
+    if (evidencePreviewUrl) URL.revokeObjectURL(evidencePreviewUrl)
+    setEvidencePreviewUrl(URL.createObjectURL(file))
+    setIsVerifyingEvidence(true)
+    setError('')
+    try {
+      const res = await api.verifyEvidenceV1(file, vType)
+      setAiVerificationResult(res)
+      if (res.decision === 'REJECT') {
+        const isMism =
+          Boolean(res.vehicle_category_mismatch) ||
+          Boolean(res.reasons?.some((r) => r.includes('VEHICLE_CATEGORY_MISMATCH')))
+        if (isMism) {
+          setError(
+            `Vehicle Category Mismatch: You selected ${formatCategoryLabel(vType)}, but the AI detected a ${formatCategoryLabel(res.detected_vehicle_category)} in the uploaded photo. Please upload a valid photo of the claimed vehicle.`,
+          )
+        } else {
+          setError(`Evidence Rejected: ${res.reasons.join(', ')}`)
+        }
+      }
+
+      // Multimodal Evidence Narration (Spoken Indic Feedback - Sprint 1.8)
+      const isMism =
+        Boolean(res.vehicle_category_mismatch) ||
+        Boolean(res.reasons?.some((r) => r.includes('VEHICLE_CATEGORY_MISMATCH')))
+      try {
+        const narration = await api.narrateEvidence({
+          decision: res.decision,
+          claimed_vehicle_type: vType,
+          detected_vehicle_category: res.detected_vehicle_category,
+          vehicle_category_mismatch: isMism,
+          total_estimated_inr: res.cost_estimate?.total_estimated_inr || 0,
+          damages: res.cost_estimate?.line_items || [],
+          language: lockedLanguage || selectedLanguage || 'hi-IN',
+        })
+        if (narration?.spoken_narration) {
+          setEvidenceNarration({
+            spoken: narration.spoken_narration,
+            lang: narration.language,
+          })
+          if (autoVoiceEnabled) {
+            setTimeout(() => speakText(narration.spoken_narration, narration.language), 400)
+          }
+        }
+      } catch (narrationErr) {
+        console.warn('Evidence narration failed:', narrationErr)
+      }
+    } catch (err: any) {
+      setError(err.message || '5-Stage AI evidence verification failed.')
+    } finally {
+      setIsVerifyingEvidence(false)
+    }
+  }
+
+  const handleToggleVehicleCategory = async (newType: 'four_wheeler' | 'two_wheeler') => {
+    setClaimedVehicleType(newType)
+    if (selectedEvidenceFile) {
+      await runAiVerificationOnFile(selectedEvidenceFile, newType)
+    }
+  }
+
   const handleUploadEvidenceFile = async (
     file: Blob | File,
     filename: string,
@@ -793,6 +1019,9 @@ export default function NewClaim() {
     for (let i = 0; i < files.length; i++) {
       const f = files[i]
       const isVideo = f.type.startsWith('video/') || /\.(mp4|mov|webm|avi)$/i.test(f.name)
+      if (!isVideo) {
+        await runAiVerificationOnFile(f)
+      }
       await handleUploadEvidenceFile(f, f.name, isVideo ? 'upload_video' : 'upload_photo')
     }
     if (evidenceInputRef.current) evidenceInputRef.current.value = ''
@@ -856,9 +1085,12 @@ export default function NewClaim() {
     canvas.toBlob(
       async (blob) => {
         if (blob) {
+          const fname = `live_capture_${session!.session_id}.jpg`
+          const fileObj = new File([blob], fname, { type: 'image/jpeg' })
+          await runAiVerificationOnFile(fileObj)
           await handleUploadEvidenceFile(
             blob,
-            `live_capture_${session!.session_id}.jpg`,
+            fname,
             'live_photo',
             session!.session_id,
           )
@@ -906,6 +1138,8 @@ export default function NewClaim() {
           filename = 'synthid_generated_damage.jpg'
         }
 
+        const fileObj = new File([finalBlob], filename, { type: 'image/jpeg' })
+        await runAiVerificationOnFile(fileObj)
         await handleUploadEvidenceFile(finalBlob, filename, 'upload_photo')
       },
       'image/jpeg',
@@ -918,6 +1152,10 @@ export default function NewClaim() {
     if (!activeClaimId) return
     if (!declarationChecked) {
       setError('Please check the Customer Declaration box to confirm your claim details.')
+      return
+    }
+    if (aiVerificationResult?.decision === 'REJECT') {
+      setError('Cannot submit claim with REJECTED evidence. Please return to Step 2 and upload valid vehicle evidence.')
       return
     }
     setIsSubmitting(true)
@@ -933,6 +1171,11 @@ export default function NewClaim() {
         damage_description: fieldMap.damage_description,
         injuries_reported: injuriesReported,
         customer_confirmation: true,
+        evidence_id: aiVerificationResult?.id,
+        verification_decision: aiVerificationResult?.decision,
+        claimed_vehicle_type: claimedVehicleType,
+        total_estimated_inr: aiVerificationResult?.cost_estimate?.total_estimated_inr,
+        cost_estimate: aiVerificationResult?.cost_estimate,
       })
       await api.generateReport(activeClaimId)
       navigate(`/claims/${activeClaimId}`)
@@ -967,7 +1210,13 @@ export default function NewClaim() {
                   onClick={() => {
                     if (item.step === 1) setWizardStep(1)
                     if (item.step === 2 && isAllCaptured) handleProceedToEvidenceStep()
-                    if (item.step === 3 && activeClaimId) setWizardStep(3)
+                    if (item.step === 3 && activeClaimId) {
+                      if (!aiVerificationResult || aiVerificationResult.decision === 'REJECT') {
+                        setError('Advancement blocked: Valid 5-stage verified vehicle evidence is required before proceeding to Customer Review.')
+                        return
+                      }
+                      setWizardStep(3)
+                    }
                   }}
                   className={`flex items-center gap-2.5 px-3.5 py-2 rounded-2xl text-left transition-all ${
                     active
@@ -1049,101 +1298,87 @@ export default function NewClaim() {
               </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2.5">
-              <div className="flex items-center gap-1.5">
-                <select
-                  value={selectedLanguage}
-                  onChange={(e) => {
-                    const val = e.target.value
-                    setSelectedLanguage(val)
-                    setLockedLanguage(val === 'indic-auto' ? null : val)
+            <div className="flex flex-col items-start sm:items-end gap-2.5">
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Voice Assistant Audio Control (Mute / Unmute) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (autoVoiceEnabled) {
+                      stopAudio()
+                      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+                        window.speechSynthesis.cancel()
+                      }
+                      setIsPlayingAudio(false)
+                      setAutoVoiceEnabled(false)
+                    } else {
+                      setAutoVoiceEnabled(true)
+                    }
                   }}
-                  className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-1.5 text-xs font-semibold text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
+                    autoVoiceEnabled
+                      ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'
+                      : 'bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100'
+                  }`}
+                  title={autoVoiceEnabled ? 'Voice output is active. Click to mute.' : 'Voice output is muted. Click to unmute.'}
                 >
-                  {INDIAN_LANGUAGES.map((l) => (
-                    <option key={l.code} value={l.code}>
-                      {l.label}
-                    </option>
-                  ))}
-                </select>
+                  {autoVoiceEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+                  <span>{autoVoiceEnabled ? 'Voice: ON' : 'Voice: MUTED'}</span>
+                </button>
+
+                {/* Replay Last Voice Response */}
+                <button
+                  type="button"
+                  onClick={handleReplayLastVoice}
+                  disabled={isSynthesizing}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
+                    isPlayingAudio
+                      ? 'bg-amber-500 border-amber-600 text-white animate-pulse'
+                      : 'bg-white border-gray-200 text-blue-700 hover:bg-blue-50'
+                  }`}
+                  title="Replay the last spoken assistant response"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>{isPlayingAudio ? 'Stop Playing' : 'Replay Voice'}</span>
+                </button>
+
+                {/* Active Live Voice Engine Indicator */}
+                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  Live Natural Voice
+                </span>
+              </div>
+
+              {/* Code-Mixed Indic Language Selector Pills (Sprint 1.8) */}
+              <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                {CODE_MIXED_LANGUAGE_PILLS.map((pill) => {
+                  const isSelected = activePillKey === pill.key
+                  return (
+                    <button
+                      key={pill.key}
+                      type="button"
+                      onClick={() => {
+                        setActivePillKey(pill.key)
+                        setSelectedLanguage(pill.code)
+                        setLockedLanguage(pill.code === 'indic-auto' ? null : pill.code)
+                      }}
+                      className={`px-2.5 py-1 rounded-xl text-xs font-semibold transition-all ${
+                        isSelected
+                          ? 'bg-blue-600 text-white shadow-xs ring-1 ring-blue-700'
+                          : 'bg-gray-50 border border-gray-200 text-gray-700 hover:bg-gray-100'
+                      }`}
+                    >
+                      {pill.label}
+                    </button>
+                  )
+                })}
+
                 {selectedLanguage === 'indic-auto' && lockedLanguage && (
                   <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-emerald-50 border border-emerald-200 text-[11px] font-bold text-emerald-800">
-                    🔒 Active: {lockedLanguage}
+                    🔒 Locked: {lockedLanguage}
                   </span>
                 )}
               </div>
-
-              <button
-                type="button"
-                onClick={() => setAutoVoiceEnabled(!autoVoiceEnabled)}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors ${
-                  autoVoiceEnabled
-                    ? 'bg-blue-50 border-blue-200 text-blue-700'
-                    : 'bg-gray-50 border-gray-200 text-gray-400'
-                }`}
-              >
-                <Volume2 className="w-3.5 h-3.5" />
-                <span>Voice: {autoVoiceEnabled ? 'ON' : 'OFF'}</span>
-              </button>
-
-              <div className="flex items-center bg-gray-100 rounded-xl p-1 text-xs">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsDemoMode(false)
-                    setError('')
-                  }}
-                  className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
-                    !isDemoMode ? 'bg-blue-600 text-white shadow-xs' : 'text-gray-600 hover:text-gray-900'
-                  }`}
-                >
-                  Live Gnani AI
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsDemoMode(true)
-                    setError('')
-                  }}
-                  className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
-                    isDemoMode ? 'bg-amber-600 text-white shadow-xs' : 'text-gray-600 hover:text-gray-900'
-                  }`}
-                >
-                  Simulated Demo
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* 1-Click Quick Scenarios Bar for Testing */}
-          <div className="bg-blue-50/60 border border-blue-200 rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-2">
-            <span className="text-xs font-bold text-blue-900 flex items-center gap-1.5">
-              <Sparkles className="w-4 h-4 text-blue-600" />
-              Quick Test Narratives (or use Microphone below):
-            </span>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() =>
-                  handleProcessTextIntake(
-                    'Nanna bike accident aayitu in Davanagere yesterday evening. Policy number MOT-2026-KA-99881. Front mudguard and headlamp damaged.',
-                  )
-                }
-                className="px-3 py-1 rounded-xl bg-white border border-blue-200 text-blue-800 text-xs font-semibold hover:bg-blue-100"
-              >
-                🇮🇳 Rahul Bike Scenario (Kannada/English - PDF Page 2)
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  handleProcessTextIntake(
-                    'చూడండి, నా కార్ యాక్సిడెంట్ అయ్యింది. పాలసీ నంబర్ ఎంఓటీ టు థౌజండ్ ట్వంటీ ఫోర్ టీఎస్ నైన్ ఎయిట్ సెవెన్ సిక్స్ ఫైవ్. నేను హైదరాబాద్ లో మధురాపూర్ దగ్గర డ్రైవ్ చేస్తున్నప్పుడు ఒక ఆటో వచ్చి సైడ్ లో హిట్ చేసింది. లెఫ్ట్ డోర్ అండ్ బంపర్ ఫుల్ గా డ్యామేజ్ అయ్యింది.',
-                  )
-                }
-                className="px-3 py-1 rounded-xl bg-white border border-blue-200 text-blue-800 text-xs font-semibold hover:bg-blue-100"
-              >
-                🇮🇳 Telugu Voice Scenario (Missing Date Follow-up)
-              </button>
             </div>
           </div>
 
@@ -1357,7 +1592,7 @@ export default function NewClaim() {
                         </button>
 
                         <div className="w-full flex-1">
-                          <MissingFieldInput onSubmit={(val) => handleApplyAnswer(val, 'text')} />
+                          <MissingFieldInput onSubmit={(val) => handleApplyAnswer(val)} />
                         </div>
                       </div>
                     ) : isAnswerRecording ? (
@@ -1401,10 +1636,18 @@ export default function NewClaim() {
                         type="button"
                         onClick={() => {
                           stopAudio()
+                          if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+                            window.speechSynthesis.cancel()
+                          }
                           setHasStartedIntake(false)
                           setTranscript('')
                           setMissingFields([])
                           setLockedLanguage(null)
+                          setExtractedSlotsSummary(null)
+                          setVehicleRegistration('')
+                          setIncidentTime('')
+                          setDrivableStatus('')
+                          setMessages([])
                           setFields([
                             { name: 'policy_reference', label: 'Policy / Vehicle Number', value: null, confidence: 'missing', is_edited: false, follow_up_question: null },
                             { name: 'vehicle_type', label: 'Vehicle Type', value: null, confidence: 'missing', is_edited: false, follow_up_question: null },
@@ -1427,6 +1670,27 @@ export default function NewClaim() {
                         <ChevronRight className="w-4 h-4" />
                       </button>
                     </div>
+                  </div>
+                )}
+
+                {extractedSlotsSummary && (
+                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-dashed border-gray-200 text-[11px]">
+                    <span className="font-bold text-emerald-800">Auto-Synced Wizard Slots:</span>
+                    {extractedSlotsSummary.vehicleType && (
+                      <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-900 font-semibold">
+                        {formatCategoryLabel(extractedSlotsSummary.vehicleType)}
+                      </span>
+                    )}
+                    {extractedSlotsSummary.registration && (
+                      <span className="px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-900 font-mono font-bold">
+                        {extractedSlotsSummary.registration}
+                      </span>
+                    )}
+                    {extractedSlotsSummary.damages && extractedSlotsSummary.damages.length > 0 && (
+                      <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 font-semibold">
+                        Damages: {extractedSlotsSummary.damages.join(', ')}
+                      </span>
+                    )}
                   </div>
                 )}
               </div>
@@ -1515,10 +1779,59 @@ export default function NewClaim() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setWizardStep(3)}
-                  className="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl bg-brand-600 text-white text-xs font-bold hover:bg-brand-700 shadow-xs"
+                  disabled={!aiVerificationResult || aiVerificationResult.decision === 'REJECT' || isVerifyingEvidence}
+                  onClick={() => {
+                    if (!aiVerificationResult) {
+                      setError('Please upload vehicle damage evidence to run 5-stage AI verification before advancing.')
+                      return
+                    }
+                    if (aiVerificationResult.decision === 'REJECT') {
+                      setError('Advancement blocked: Evidence was rejected by the 5-stage AI engine. Please upload a valid photo of the claimed vehicle.')
+                      return
+                    }
+                    setWizardStep(3)
+                  }}
+                  className="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl bg-brand-600 text-white text-xs font-bold hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-xs"
                 >
                   Proceed to Step 3: Customer Review <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Claimed Vehicle Category Selection */}
+            <div className="bg-gray-50/90 border border-gray-200 rounded-2xl p-4 mb-6 space-y-2">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                <label className="block text-xs font-bold text-gray-800">
+                  Claimed Policy Vehicle Category (5-Stage Vision Screening Guard)
+                </label>
+                <span className="text-[11px] font-semibold text-gray-500">
+                  Cross-vehicle mismatch (Car vs. Bike) is strictly rejected
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-3 max-w-md">
+                <button
+                  type="button"
+                  onClick={() => handleToggleVehicleCategory('four_wheeler')}
+                  className={`flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl border text-xs font-bold transition-all ${
+                    claimedVehicleType === 'four_wheeler'
+                      ? 'bg-brand-50 border-brand-600 text-brand-800 shadow-xs'
+                      : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-100'
+                  }`}
+                >
+                  <Car className="w-4 h-4" />
+                  Four-Wheeler (Car)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleToggleVehicleCategory('two_wheeler')}
+                  className={`flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl border text-xs font-bold transition-all ${
+                    claimedVehicleType === 'two_wheeler'
+                      ? 'bg-brand-50 border-brand-600 text-brand-800 shadow-xs'
+                      : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-100'
+                  }`}
+                >
+                  <Bike className="w-4 h-4" />
+                  Two-Wheeler (Bike)
                 </button>
               </div>
             </div>
@@ -1642,6 +1955,261 @@ export default function NewClaim() {
                 </div>
               </div>
             </div>
+
+            {/* ── 5-Stage AI Evidence Intelligence & Repair Estimate Panel (Sprint 1.8) ── */}
+            {isVerifyingEvidence && (
+              <div className="bg-blue-50 border border-blue-200 rounded-2xl p-6 text-center space-y-2 mb-6">
+                <Spinner size="md" />
+                <div className="text-sm font-bold text-blue-900">
+                  Running 5-Stage AI Evidence Screening &amp; YOLO Damage Estimation...
+                </div>
+                <p className="text-xs text-blue-700">
+                  Inspecting magic bytes, EXIF metadata, YOLOv8 vehicle &amp; damage detectors, and EfficientNetV2 spoof risk.
+                </p>
+              </div>
+            )}
+
+            {aiVerificationResult && !isVerifyingEvidence && (
+              <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-xs space-y-5 mb-6">
+                {/* Decision Banner */}
+                {aiVerificationResult.decision === 'REJECT' && (
+                  <div className="flex items-start gap-3 bg-red-50 border-2 border-red-300 text-red-900 rounded-2xl p-4">
+                    <XCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <div className="font-extrabold text-sm text-red-950">
+                        Evidence Rejected — Cannot Proceed with Claim
+                      </div>
+                      {aiVerificationResult.vehicle_category_mismatch ||
+                      aiVerificationResult.reasons?.some((r) => r.includes('VEHICLE_CATEGORY_MISMATCH')) ? (
+                        <p className="text-xs text-red-800 leading-relaxed">
+                          <strong>Vehicle Category Mismatch:</strong> You selected{' '}
+                          <strong>{formatCategoryLabel(claimedVehicleType)}</strong>, but the AI vision pipeline detected a{' '}
+                          <strong>{formatCategoryLabel(aiVerificationResult.detected_vehicle_category)}</strong> in the uploaded photo.
+                          Please upload a photo of the claimed {formatCategoryLabel(claimedVehicleType)}.
+                        </p>
+                      ) : (
+                        <p className="text-xs text-red-800 leading-relaxed">
+                          {aiVerificationResult.reasons.join(', ')}
+                        </p>
+                      )}
+                      <div className="text-[11px] font-semibold text-red-700 pt-0.5">
+                        🚫 Wizard advancement to Step 3 is blocked until valid vehicle evidence is uploaded.
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {aiVerificationResult.decision === 'PASS' && (
+                  <div className="flex items-center justify-between flex-wrap gap-2 bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-2xl p-4">
+                    <div className="flex items-center gap-2.5">
+                      <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0" />
+                      <div>
+                        <div className="text-xs font-bold text-emerald-950">
+                          Evidence Passed 5-Stage Screening — Approved for Auto-Estimate
+                        </div>
+                        <div className="text-[11px] text-emerald-700">
+                          {formatCategoryLabel(claimedVehicleType)} verified &bull; Spoof Risk: {(aiVerificationResult.spoof_risk * 100).toFixed(1)}% &bull; Detected Damages: {aiVerificationResult.damage_count}
+                        </div>
+                      </div>
+                    </div>
+                    <span className="px-3 py-1 rounded-full text-xs font-extrabold bg-emerald-600 text-white shadow-xs">
+                      PASS (Approved)
+                    </span>
+                  </div>
+                )}
+
+                {aiVerificationResult.decision === 'REVIEW' && (
+                  <div className="flex items-center justify-between flex-wrap gap-2 bg-amber-50 border border-amber-300 text-amber-900 rounded-2xl p-4">
+                    <div className="flex items-center gap-2.5">
+                      <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+                      <div>
+                        <div className="text-xs font-bold text-amber-950">
+                          Flagged for Human Adjuster Review — Provisional Estimate Generated
+                        </div>
+                        <div className="text-[11px] text-amber-800">
+                          {aiVerificationResult.reasons.join(' • ')}
+                        </div>
+                      </div>
+                    </div>
+                    <span className="px-3 py-1 rounded-full text-xs font-extrabold bg-amber-600 text-white shadow-xs">
+                      REVIEW (Provisional)
+                    </span>
+                  </div>
+                )}
+
+                {/* Spoken Indic Evidence Narration (Sprint 1.8) */}
+                {evidenceNarration && (
+                  <div className="p-3.5 rounded-2xl bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 flex items-center justify-between gap-3">
+                    <div className="flex items-start gap-2.5">
+                      <Volume2 className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                      <div>
+                        <div className="text-[11px] font-bold text-blue-950 uppercase tracking-wide flex items-center gap-1.5">
+                          <span>AI Spoken Evidence Narration ({evidenceNarration.lang})</span>
+                          <span className="w-1.5 h-1.5 rounded-full bg-blue-600" />
+                          <span className="text-[10px] text-blue-700 font-semibold lowercase">gnani timbre tts</span>
+                        </div>
+                        <p className="text-xs text-blue-900 mt-0.5 italic">"{evidenceNarration.spoken}"</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => speakText(evidenceNarration.spoken, evidenceNarration.lang)}
+                      className="shrink-0 px-3.5 py-1.5 rounded-xl bg-blue-600 text-white font-semibold text-xs hover:bg-blue-700 shadow-xs flex items-center gap-1.5 transition-all"
+                    >
+                      <Volume2 className="w-3.5 h-3.5" />
+                      <span>{isPlayingAudio && activeSpeechText === evidenceNarration.spoken ? 'Stop' : 'Replay Audio'}</span>
+                    </button>
+                  </div>
+                )}
+
+                {/* Dual Grid: Preview with Bounding Boxes + Itemized INR Estimate */}
+                <div className="grid lg:grid-cols-2 gap-5">
+                  {/* Box A: Image Preview with Bounding Boxes */}
+                  <div className="space-y-2">
+                    <div className="text-xs font-bold text-gray-700 flex items-center justify-between">
+                      <span>AI Vision Detection Overlays</span>
+                      <span className="text-[11px] text-gray-500 font-mono">
+                        {aiVerificationResult.filename}
+                      </span>
+                    </div>
+                    <div className="bg-gray-50 border border-gray-200 rounded-xl p-2 min-h-[220px] flex items-center justify-center overflow-hidden">
+                      {evidencePreviewUrl ? (
+                        <div className="relative inline-block max-w-full">
+                          <img
+                            src={evidencePreviewUrl}
+                            alt="Verified evidence preview"
+                            className="max-h-64 w-auto rounded-lg object-contain block"
+                          />
+                          {aiVerificationResult.stage_results?.stage1_integrity?.width &&
+                            aiVerificationResult.stage_results?.stage1_integrity?.height && (
+                              <>
+                                {(aiVerificationResult.stage_results?.stage3a_vehicle?.detections || []).map((b, idx) => {
+                                  const imgW = aiVerificationResult.stage_results!.stage1_integrity!.width!
+                                  const imgH = aiVerificationResult.stage_results!.stage1_integrity!.height!
+                                  const [x1, y1, x2, y2] = b.bbox
+                                  return (
+                                    <div
+                                      key={`veh-box-${idx}`}
+                                      style={{
+                                        left: `${(x1 / imgW) * 100}%`,
+                                        top: `${(y1 / imgH) * 100}%`,
+                                        width: `${((x2 - x1) / imgW) * 100}%`,
+                                        height: `${((y2 - y1) / imgH) * 100}%`,
+                                      }}
+                                      className="absolute border-2 border-blue-500 bg-blue-500/10 pointer-events-none rounded-xs"
+                                    >
+                                      <span className="absolute -top-5 left-0 bg-blue-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-xs whitespace-nowrap">
+                                        {b.class_name} {(b.confidence * 100).toFixed(0)}%
+                                      </span>
+                                    </div>
+                                  )
+                                })}
+                                {(aiVerificationResult.stage_results?.stage3b_damage?.detections || []).map((b, idx) => {
+                                  const imgW = aiVerificationResult.stage_results!.stage1_integrity!.width!
+                                  const imgH = aiVerificationResult.stage_results!.stage1_integrity!.height!
+                                  const [x1, y1, x2, y2] = b.bbox
+                                  return (
+                                    <div
+                                      key={`dmg-box-${idx}`}
+                                      style={{
+                                        left: `${(x1 / imgW) * 100}%`,
+                                        top: `${(y1 / imgH) * 100}%`,
+                                        width: `${((x2 - x1) / imgW) * 100}%`,
+                                        height: `${((y2 - y1) / imgH) * 100}%`,
+                                      }}
+                                      className="absolute border-2 border-red-500 bg-red-500/15 pointer-events-none rounded-xs"
+                                    >
+                                      <span className="absolute -top-5 left-0 bg-red-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-xs whitespace-nowrap">
+                                        {b.class_name} {(b.confidence * 100).toFixed(0)}%
+                                      </span>
+                                    </div>
+                                  )
+                                })}
+                              </>
+                            )}
+                        </div>
+                      ) : (
+                        <div className="text-gray-400 text-xs">Preview unavailable</div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Box B: Itemized Cost Estimate Table */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-gray-700 flex items-center gap-1.5">
+                        <IndianRupee className="w-3.5 h-3.5 text-brand-600" />
+                        Itemized Repair Cost Estimate (INR)
+                      </span>
+                      {aiVerificationResult.cost_estimate && (
+                        <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-gray-100 text-gray-700">
+                          Severity: {aiVerificationResult.cost_estimate.overall_severity}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="overflow-x-auto border border-gray-200 rounded-xl">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="border-b border-gray-200 bg-gray-50/80 text-gray-500 text-[11px]">
+                            <th className="py-2 px-3 font-semibold">Damage Type</th>
+                            <th className="py-2 px-2 font-semibold">Severity</th>
+                            <th className="py-2 px-2 font-semibold">Base + Labor</th>
+                            <th className="py-2 px-3 font-semibold text-right">Subtotal</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {(!aiVerificationResult.cost_estimate?.line_items ||
+                            aiVerificationResult.cost_estimate.line_items.length === 0) ? (
+                            <tr>
+                              <td colSpan={4} className="py-4 text-center text-gray-400 text-xs">
+                                {aiVerificationResult.decision === 'REJECT'
+                                  ? 'Upload rejected — ₹0 estimate issued.'
+                                  : 'No damages detected on this vehicle.'}
+                              </td>
+                            </tr>
+                          ) : (
+                            aiVerificationResult.cost_estimate.line_items.map((item, idx) => (
+                              <tr key={idx} className="hover:bg-gray-50/60">
+                                <td className="py-2 px-3 font-medium text-gray-900 capitalize">
+                                  {item.damage_type.replace('_', ' ')}
+                                </td>
+                                <td className="py-2 px-2">
+                                  <span
+                                    className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                                      item.severity === 'Severe'
+                                        ? 'bg-red-100 text-red-700'
+                                        : item.severity === 'Moderate'
+                                          ? 'bg-amber-100 text-amber-700'
+                                          : 'bg-blue-100 text-blue-700'
+                                    }`}
+                                  >
+                                    {item.severity}
+                                  </span>
+                                </td>
+                                <td className="py-2 px-2 text-gray-600">
+                                  {formatInr(item.base_part_inr)} + {formatInr(item.labor_inr)}
+                                </td>
+                                <td className="py-2 px-3 font-bold text-gray-900 text-right">
+                                  {formatInr(item.subtotal_inr)}
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50 border border-gray-200">
+                      <span className="text-xs font-bold text-gray-700">Total AI Estimated Amount:</span>
+                      <span className="text-lg font-extrabold text-brand-700">
+                        {formatInr(aiVerificationResult.cost_estimate?.total_estimated_inr || 0)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Built-in Integrity Verification Lab (1-Click Master Test Scenarios 4, 5, 6, 7, 8) */}
             <div className="bg-gray-50 rounded-2xl border border-gray-200 p-4 mb-6">
@@ -1849,6 +2417,7 @@ export default function NewClaim() {
                   type="text"
                   value={vehicleRegistration}
                   onChange={(e) => setVehicleRegistration(e.target.value)}
+                  placeholder="Enter your vehicle registration number"
                   className="w-full rounded-xl border border-gray-300 px-3 py-2 text-xs"
                 />
               </div>
@@ -1860,6 +2429,7 @@ export default function NewClaim() {
                   type="text"
                   value={incidentTime}
                   onChange={(e) => setIncidentTime(e.target.value)}
+                  placeholder="Enter approximate date & time of incident"
                   className="w-full rounded-xl border border-gray-300 px-3 py-2 text-xs"
                 />
               </div>
@@ -1871,6 +2441,7 @@ export default function NewClaim() {
                   type="text"
                   value={drivableStatus}
                   onChange={(e) => setDrivableStatus(e.target.value)}
+                  placeholder="Yes / No — note if towing is needed"
                   className="w-full rounded-xl border border-gray-300 px-3 py-2 text-xs"
                 />
               </div>
@@ -1898,6 +2469,51 @@ export default function NewClaim() {
               </div>
             </div>
           </div>
+
+          {/* ── Sprint 1.8: AI Evidence & Approved Repair Estimate Summary Card ── */}
+          {aiVerificationResult && (
+            <div className="bg-brand-50/50 border border-brand-200 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-5 h-5 text-brand-600" />
+                  <h3 className="text-sm font-bold text-brand-950">
+                    5-Stage AI Evidence Intelligence &amp; Cost Estimate Summary
+                  </h3>
+                </div>
+                <span
+                  className={`px-3 py-1 rounded-full text-xs font-extrabold ${
+                    aiVerificationResult.decision === 'PASS'
+                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                      : 'bg-amber-100 text-amber-800 border border-amber-300'
+                  }`}
+                >
+                  {aiVerificationResult.decision === 'PASS' ? 'APPROVED AUTO-ESTIMATE' : 'PROVISIONAL UNDER REVIEW'}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                <div className="bg-white p-2.5 rounded-xl border border-brand-100">
+                  <div className="text-gray-500 text-[11px]">Vehicle Category</div>
+                  <div className="font-bold text-gray-900 mt-0.5">{formatCategoryLabel(claimedVehicleType)}</div>
+                </div>
+                <div className="bg-white p-2.5 rounded-xl border border-brand-100">
+                  <div className="text-gray-500 text-[11px]">Spoof Screening</div>
+                  <div className="font-bold text-gray-900 mt-0.5">
+                    {(aiVerificationResult.spoof_risk * 100).toFixed(1)}% Risk
+                  </div>
+                </div>
+                <div className="bg-white p-2.5 rounded-xl border border-brand-100">
+                  <div className="text-gray-500 text-[11px]">Damages Detected</div>
+                  <div className="font-bold text-gray-900 mt-0.5">{aiVerificationResult.damage_count} instance(s)</div>
+                </div>
+                <div className="bg-white p-2.5 rounded-xl border border-brand-100">
+                  <div className="text-gray-500 text-[11px]">Total AI Estimate</div>
+                  <div className="font-bold text-brand-700 text-sm mt-0.5">
+                    {formatInr(aiVerificationResult.cost_estimate?.total_estimated_inr || 0)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Customer Declaration Checkbox (Section 8 of Dossier) */}
           <div className="bg-emerald-50/70 border border-emerald-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">

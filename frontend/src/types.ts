@@ -42,6 +42,69 @@ export interface VoiceTranscribeResponse {
   assistant_dialogue?: string | null
   assistant_speech_text?: string | null
   assistant_language?: string | null
+  claimed_vehicle_type?: 'two_wheeler' | 'four_wheeler' | null
+  vehicle_registration?: string | null
+  damage_keywords?: string[]
+  incident_description?: string | null
+}
+
+export interface EvidenceNarrationRequest {
+  decision: 'PASS' | 'REVIEW' | 'REJECT' | string
+  claimed_vehicle_type: string
+  detected_vehicle_category?: string | null
+  vehicle_category_mismatch?: boolean
+  total_estimated_inr?: number
+  damages?: any[]
+  language?: string
+}
+
+export interface EvidenceNarrationResponse {
+  spoken_narration: string
+  narration_text?: string
+  language: string
+  decision: string
+  total_estimated_inr: number
+}
+
+export interface ExtractSlotsResponse {
+  transcript: string
+  claimed_vehicle_type?: 'two_wheeler' | 'four_wheeler' | null
+  vehicle_registration?: string | null
+  damage_keywords: string[]
+  incident_description: string
+  detected_language: string
+  reply_text: string
+  fields: ClaimField[]
+  missing_fields: string[]
+  assistant_dialogue: string
+  assistant_speech_text: string
+  assistant_language: string
+}
+
+export interface ConverseTurnRequest {
+  message: string
+  language?: string
+  known_fields?: Record<string, string | null>
+  history?: Array<{ sender: 'user' | 'assistant'; text: string }>
+  expected_field?: string | null
+}
+
+export interface ConverseTurnResponse {
+  transcript: string
+  detected_language: string
+  assistant_language: string
+  reply_text: string
+  assistant_dialogue: string
+  assistant_speech_text: string
+  fields: ClaimField[]
+  missing_fields: string[]
+  known_fields: Record<string, string | null>
+  newly_captured: Record<string, string>
+  claimed_vehicle_type?: 'two_wheeler' | 'four_wheeler' | null
+  vehicle_registration?: string | null
+  damage_keywords: string[]
+  incident_description?: string | null
+  is_complete: boolean
 }
 
 export interface SpeechSynthesizeRequest {
@@ -248,6 +311,12 @@ export interface ClaimCreateRequest {
   people_involved?: string
   injuries_reported?: string
   detailed_statement?: string
+  evidence_id?: string
+  claimed_vehicle_type?: string
+  verification_decision?: string
+  spoof_risk?: number
+  total_estimated_inr?: number
+  cost_estimate?: CostEstimateReport | null
 }
 
 export interface ClaimCreateResponse {
@@ -326,4 +395,127 @@ export interface DashboardStats {
   total_claims: number
   recent_claims: ClaimRecord[]
   is_demo: boolean
+}
+
+// ── Sprint 1.4 / 1.5: 5-Stage Evidence Intelligence & Cost Estimator ──
+
+export interface CostEstimateLineItem {
+  damage_type: string
+  confidence: number
+  area_ratio: number
+  severity: 'Minor' | 'Moderate' | 'Severe'
+  base_part_inr: number
+  labor_inr: number
+  Diagnostic_multiplier: number
+  multiplier?: number
+  subtotal_inr: number
+}
+
+export interface CostEstimateReport {
+  currency: string
+  estimate_status: 'APPROVED_AUTO_ESTIMATE' | 'PROVISIONAL_PENDING_REVIEW' | 'REJECTED_NO_ESTIMATE'
+  overall_severity: 'None' | 'Minor' | 'Moderate' | 'Severe'
+  line_items: CostEstimateLineItem[]
+  total_estimated_inr: number
+  total_inr: number
+}
+
+export interface YoloDetectionBox {
+  class_id: number
+  class_name: string
+  confidence: number
+  bbox: [number, number, number, number]
+  area_ratio: number
+}
+
+export interface EvidenceVerificationReport {
+  id: string
+  filename: string
+  sha256: string
+  decision: 'PASS' | 'REVIEW' | 'REJECT'
+  claimed_vehicle_type?: 'four_wheeler' | 'two_wheeler' | string
+  detected_vehicle_category?: 'four_wheeler' | 'two_wheeler' | 'unknown' | string
+  vehicle_category_mismatch?: boolean
+  spoof_risk: number
+  predicted_spoof_class: string
+  vehicle_detected: boolean
+  damage_count: number
+  context_valid?: boolean
+  reasons: string[]
+  cost_estimate?: CostEstimateReport | null
+  stage_results: {
+    claimed_vehicle_type?: string
+    detected_vehicle_category?: string
+    vehicle_category_mismatch?: boolean
+    stage1_integrity?: {
+      stage1_passed: boolean
+      sha256: string
+      file_size_bytes: number
+      detected_format?: string | null
+      detected_mime?: string
+      width?: number | null
+      height?: number | null
+      error_code?: string | null
+      error_reason?: string | null
+    } | null
+    stage2_metadata?: {
+      has_exif: boolean
+      camera_make_model?: string | null
+      datetime_original?: string | null
+      software_tag?: string | null
+      editing_software_detected: boolean
+      c2pa_present: boolean
+      metadata_risk_score: number
+    } | null
+    stage3a_vehicle?: {
+      vehicle_detected: boolean
+      detected_classes: string[]
+      max_confidence: number
+      largest_area_ratio: number
+      detections: YoloDetectionBox[]
+    } | null
+    stage3b_damage?: {
+      damage_detected: boolean
+      damage_count: number
+      detected_damage_types: string[]
+      max_confidence: number
+      detections: YoloDetectionBox[]
+    } | null
+    stage4_spoof?: {
+      spoof_risk: number
+      predicted_class: string
+      probabilities: Record<string, number>
+      thresholds: Record<string, number>
+      device: string
+    } | null
+    stage5_risk?: {
+      decision: 'PASS' | 'REVIEW' | 'REJECT'
+      reasons: string[]
+      requires_human_review: boolean
+    } | null
+    cost_estimate?: CostEstimateReport | null
+    linked_claim?: LinkedClaim | null
+  }
+  linked_claim?: LinkedClaim | null
+  processing_time_ms: number
+  created_at: string
+}
+
+export interface LinkedClaim {
+  claim_id: string
+  evidence_id: string
+  policy_number: string
+  vehicle_registration: string
+  vehicle_category: string
+  verification_decision: 'PASS' | 'REVIEW' | 'REJECT'
+  estimate_status?: string
+  total_estimated_inr: number
+  damage_count: number
+  claim_status: 'APPROVED' | 'UNDER_REVIEW'
+  created_at: string
+}
+
+export interface EvidenceVerificationHistoryResponse {
+  total: number
+  verifications: EvidenceVerificationReport[]
 }
