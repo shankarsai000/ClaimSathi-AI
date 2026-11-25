@@ -45,6 +45,29 @@ def aggregate_risk(
             "requires_human_review": False,
         }
 
+    # 1C. Non-Vehicle Person / Selfie Guard -> REJECT (prevents laptop/front-camera selfies from passing as a claim)
+    if not context_valid and (stage3_vehicle or {}).get("person_detected", False):
+        reasons.append(
+            "NON_VEHICLE_PERSON_SELFIE_DETECTED: A person/selfie was captured instead of a motor vehicle. Please point the camera at your damaged vehicle."
+        )
+        return {
+            "decision": "REJECT",
+            "reasons": reasons,
+            "requires_human_review": False,
+        }
+
+    # 1D. Non-Vehicle Object Guard -> REJECT (animals, indoor furniture, household objects without any vehicle)
+    if not context_valid and (stage3_vehicle or {}).get("non_vehicle_subject_detected", False):
+        obj_names = ", ".join((stage3_vehicle or {}).get("non_vehicle_subject_names") or ["non-vehicle object"])
+        reasons.append(
+            f"NON_VEHICLE_OBJECT_DETECTED: A non-vehicle object ({obj_names}) was detected instead of a motor vehicle. Please upload a clear photo of your damaged vehicle."
+        )
+        return {
+            "decision": "REJECT",
+            "reasons": reasons,
+            "requires_human_review": False,
+        }
+
     stage2 = stage2 or {}
     stage4_spoof = stage4_spoof or {}
     thresholds = stage4_spoof.get("thresholds", {})
@@ -53,6 +76,17 @@ def aggregate_risk(
 
     spoof_risk = float(stage4_spoof.get("spoof_risk", 0.0))
     predicted_class = stage4_spoof.get("predicted_class", "unknown")
+
+    # 1E. Direct Non-Vehicle / Blank / Wall Photo Guard -> REJECT when spoof risk is below fraud threshold
+    if not context_valid and spoof_risk < review_min_spoof_risk:
+        reasons.append(
+            "NO_VEHICLE_DETECTED_REJECTED: No bike, car, or vehicle damage was detected in this image. Please capture or upload a clear photo of your damaged vehicle."
+        )
+        return {
+            "decision": "REJECT",
+            "reasons": reasons,
+            "requires_human_review": False,
+        }
 
     review_triggered = False
 

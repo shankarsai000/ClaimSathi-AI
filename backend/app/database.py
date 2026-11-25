@@ -16,6 +16,7 @@ Implements the complete 12-table architecture from _ClaimSathi AI product flow.p
 """
 
 import os
+import secrets
 import aiosqlite
 import sqlite3
 import hashlib
@@ -33,6 +34,9 @@ from .models import (
     EvidenceAssetRecord,
     EvidenceCheckRecord,
     DuplicateStatus,
+    MotorClaimFormDetails,
+    MotorAdjusterPlaceholders,
+    mask_pii_value,
 )
 from .auth import hash_password
 
@@ -311,6 +315,10 @@ async def init_db():
             ("customer_confirmation", "INTEGER DEFAULT 1"),
             ("report_status", "TEXT DEFAULT 'not_generated'"),
             ("insurer_submission_status", "TEXT DEFAULT 'not_submitted'"),
+            ("claimed_registration", "TEXT"),
+            ("vehicle_make_model", "TEXT"),
+            ("motor_claim_form_json", "TEXT DEFAULT '{}'"),
+            ("adjuster_assessment_json", "TEXT DEFAULT '{}'"),
         ]
         for col_name, col_def in migrations:
             if col_name not in existing_cols:
@@ -727,18 +735,43 @@ async def _count_claim_evidence(db: aiosqlite.Connection, claim_id: str) -> tupl
     return img_cnt, vid_cnt
 
 
+def _compute_masked_pii_summary(form: MotorClaimFormDetails) -> Dict[str, Optional[str]]:
+    """Compute DPDP-masked summary for sensitive customer identifiers."""
+    return {
+        "bank_account_number_masked": mask_pii_value(form.bank_account_number, 4) if form.bank_account_number else None,
+        "driver_license_number_masked": mask_pii_value(form.driver_license_number, 4) if form.driver_license_number else None,
+        "registered_mobile_masked": mask_pii_value(form.registered_mobile, 4) if form.registered_mobile else None,
+    }
+
+
 def _row_to_claim_record(row: aiosqlite.Row, img_cnt: int = 0, vid_cnt: int = 0) -> ClaimRecord:
     keys = row.keys()
+    raw_form = row["motor_claim_form_json"] if "motor_claim_form_json" in keys and row["motor_claim_form_json"] else "{}"
+    try:
+        parsed_form = json.loads(raw_form) if isinstance(raw_form, str) else (raw_form or {})
+        motor_form = MotorClaimFormDetails(**parsed_form) if isinstance(parsed_form, dict) else MotorClaimFormDetails()
+    except Exception:
+        motor_form = MotorClaimFormDetails()
+
+    raw_adj = row["adjuster_assessment_json"] if "adjuster_assessment_json" in keys and row["adjuster_assessment_json"] else "{}"
+    try:
+        parsed_adj = json.loads(raw_adj) if isinstance(raw_adj, str) else (raw_adj or {})
+        adj_data = MotorAdjusterPlaceholders(**parsed_adj) if isinstance(parsed_adj, dict) else MotorAdjusterPlaceholders()
+    except Exception:
+        adj_data = MotorAdjusterPlaceholders()
+
     return ClaimRecord(
         id=row["id"],
         customer_id=row["customer_id"] if "customer_id" in keys and row["customer_id"] else "USR-100001",
         insurance_type=row["insurance_type"] if "insurance_type" in keys and row["insurance_type"] else "motor",
         policy_reference=row["policy_reference"],
+        claimed_registration=row["claimed_registration"] if "claimed_registration" in keys and row["claimed_registration"] else None,
         insurer_name=row["insurer_name"] if "insurer_name" in keys and row["insurer_name"] else "Bharat General Insurance",
         policy_type=row["policy_type"] if "policy_type" in keys and row["policy_type"] else "Comprehensive Motor Policy",
         incident_location=row["incident_location"],
         incident_date=row["incident_date"],
         vehicle_type=row["vehicle_type"],
+        vehicle_make_model=row["vehicle_make_model"] if "vehicle_make_model" in keys and row["vehicle_make_model"] else None,
         damage_description=row["damage_description"],
         people_involved=row["people_involved"] if "people_involved" in keys and row["people_involved"] else "Policyholder (Driver)",
         injuries_reported=row["injuries_reported"] if "injuries_reported" in keys and row["injuries_reported"] else "No physical injuries reported",
@@ -750,6 +783,9 @@ def _row_to_claim_record(row: aiosqlite.Row, img_cnt: int = 0, vid_cnt: int = 0)
         insurer_submission_status=row["insurer_submission_status"] if "insurer_submission_status" in keys and row["insurer_submission_status"] else "not_submitted",
         evidence_count_images=img_cnt,
         evidence_count_videos=vid_cnt,
+        motor_claim_form=motor_form,
+        insurer_adjuster_data=adj_data,
+        masked_pii_summary=_compute_masked_pii_summary(motor_form),
         is_demo=bool(row["is_demo"]),
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
@@ -772,25 +808,36 @@ async def insert_claim(
         )
 
     now = datetime.now(timezone.utc).isoformat()
+    motor_form_json = json.dumps(
+        claim.motor_claim_form.model_dump() if claim.motor_claim_form else {},
+        ensure_ascii=False,
+    )
+    adj_json = json.dumps(
+        claim.insurer_adjuster_data.model_dump() if claim.insurer_adjuster_data else {},
+        ensure_ascii=False,
+    )
     async with get_db_connection() as db:
         await db.execute(
             """INSERT INTO claims
-               (id, customer_id, insurance_type, policy_reference, insurer_name, policy_type,
-                incident_location, incident_date, vehicle_type, damage_description,
-                people_involved, injuries_reported, detailed_statement, transcript,
-                status, customer_confirmation, report_status, insurer_submission_status,
+               (id, customer_id, insurance_type, policy_reference, claimed_registration,
+                insurer_name, policy_type, incident_location, incident_date, vehicle_type,
+                vehicle_make_model, damage_description, people_involved, injuries_reported,
+                detailed_statement, transcript, status, customer_confirmation, report_status,
+                insurer_submission_status, motor_claim_form_json, adjuster_assessment_json,
                 is_demo, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 claim.id,
                 claim.customer_id,
                 claim.insurance_type,
                 claim.policy_reference,
+                claim.claimed_registration,
                 claim.insurer_name,
                 claim.policy_type,
                 claim.incident_location,
                 claim.incident_date,
                 claim.vehicle_type,
+                claim.vehicle_make_model,
                 claim.damage_description,
                 claim.people_involved,
                 claim.injuries_reported,
@@ -800,6 +847,8 @@ async def insert_claim(
                 int(claim.customer_confirmation),
                 claim.report_status,
                 claim.insurer_submission_status,
+                motor_form_json,
+                adj_json,
                 1,
                 claim.created_at.isoformat(),
                 claim.updated_at.isoformat(),
@@ -1119,7 +1168,7 @@ async def get_claim_evidence(claim_id: str, requesting_user_id: Optional[str] = 
 
 # ── Live Camera Capture Sessions ───────────────────────
 async def create_capture_session(user_id: str, claim_id: Optional[str], instructions: list[str]) -> Dict[str, Any]:
-    session_id = f"CAP-2026-{uuid4().hex[:6].upper()}"
+    session_id = f"CAP-2026-{secrets.token_hex(6).upper()}"
     now = datetime.now(timezone.utc)
     async with get_db_connection() as db:
         await db.execute(

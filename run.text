@@ -3,8 +3,11 @@ cd "d:\ClaimSathi AI\backend"
 uvicorn app.main:app --reload --port 8080
 
 
+
+
 cd "d:\ClaimSathi AI\frontend"
 npm run dev
+
 
 
 cd "d:\ClaimSathi AI\backend"

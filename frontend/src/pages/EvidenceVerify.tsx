@@ -19,7 +19,11 @@ import {
 } from 'lucide-react'
 import { api } from '../api'
 import Spinner from '../components/Spinner'
-import type { EvidenceVerificationReport, YoloDetectionBox } from '../types'
+import type {
+  EvidenceVerificationReport,
+  GovernanceMetricsResponse,
+  YoloDetectionBox,
+} from '../types'
 
 function DecisionBadge({ decision }: { decision: 'PASS' | 'REVIEW' | 'REJECT' }) {
   if (decision === 'PASS') {
@@ -71,9 +75,11 @@ export default function EvidenceVerify() {
   const [history, setHistory] = useState<EvidenceVerificationReport[]>([])
   const [loadingHistory, setLoadingHistory] = useState(true)
 
-  // Sprint 1.7: Reviewer Override & Official Claim Creation State
+  // Sprint 1.7 / 2.1: Reviewer Override (with IRDAI Tagging) & Official Claim Creation State
   const [reviewerNote, setReviewerNote] = useState('Verified physical vehicle image; approving provisional estimate.')
+  const [overrideReasonTag, setOverrideReasonTag] = useState('FALSE_POSITIVE_GENUINE_DAMAGE')
   const [overriding, setOverriding] = useState(false)
+  const [governanceMetrics, setGovernanceMetrics] = useState<GovernanceMetricsResponse | null>(null)
   const [vehicleRegistration, setVehicleRegistration] = useState('')
   const [policyNumber, setPolicyNumber] = useState('')
   const [creatingClaim, setCreatingClaim] = useState(false)
@@ -82,8 +88,12 @@ export default function EvidenceVerify() {
   const loadHistory = async () => {
     setLoadingHistory(true)
     try {
-      const res = await api.getEvidenceHistoryV1(25)
+      const [res, gov] = await Promise.all([
+        api.getEvidenceHistoryV1(25),
+        api.getGovernanceMetricsV1().catch(() => null),
+      ])
       setHistory(res.verifications || [])
+      if (gov) setGovernanceMetrics(gov)
     } catch (e: any) {
       console.error('Failed to fetch verification history:', e)
     } finally {
@@ -156,7 +166,12 @@ export default function EvidenceVerify() {
     setError('')
     setClaimActionMessage('')
     try {
-      const res = await api.overrideEvidenceDecision(report.id, newDecision, reviewerNote)
+      const res = await api.overrideEvidenceDecision(
+        report.id,
+        newDecision,
+        reviewerNote,
+        overrideReasonTag,
+      )
       setReport(res)
       await loadHistory()
     } catch (e: any) {
@@ -261,6 +276,30 @@ export default function EvidenceVerify() {
         <div className="no-print flex items-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl p-4 text-sm font-semibold">
           <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
           <span>{claimActionMessage}</span>
+        </div>
+      )}
+
+      {/* IRDAI 2026 AI Governance Metrics Strip */}
+      {governanceMetrics && (
+        <div className="no-print grid grid-cols-2 sm:grid-cols-4 gap-3 bg-white border border-gray-200 rounded-2xl p-3.5 shadow-xs">
+          <div className="px-2">
+            <div className="text-[11px] font-semibold text-gray-500">Total AI Screened</div>
+            <div className="text-lg font-extrabold text-gray-900">{governanceMetrics.total_verifications}</div>
+          </div>
+          <div className="px-2 border-l border-gray-100">
+            <div className="text-[11px] font-semibold text-gray-500">AI Flagged (REVIEW/REJECT)</div>
+            <div className="text-lg font-extrabold text-amber-700">{governanceMetrics.ai_flagged_count}</div>
+          </div>
+          <div className="px-2 sm:border-l border-gray-100">
+            <div className="text-[11px] font-semibold text-gray-500">False-Positive Overrides</div>
+            <div className="text-lg font-extrabold text-emerald-700">{governanceMetrics.false_positive_overrides}</div>
+          </div>
+          <div className="px-2 border-l border-gray-100">
+            <div className="text-[11px] font-semibold text-gray-500">IRDAI False-Positive Rate</div>
+            <div className="text-lg font-extrabold text-brand-700">
+              {(governanceMetrics.false_positive_rate * 100).toFixed(1)}%
+            </div>
+          </div>
         </div>
       )}
 
@@ -480,17 +519,42 @@ export default function EvidenceVerify() {
                   <p className="text-xs text-amber-800">
                     This upload triggered secondary fraud-risk screening checks. A certified claims reviewer may inspect the visual evidence and confirm or reject the estimate.
                   </p>
-                  <div className="space-y-1.5">
-                    <label className="block text-[11px] font-bold text-amber-900">
-                      Reviewer Note
-                    </label>
-                    <input
-                      type="text"
-                      value={reviewerNote}
-                      onChange={(e) => setReviewerNote(e.target.value)}
-                      placeholder="Verified physical vehicle image; approving provisional estimate."
-                      className="w-full text-xs px-3 py-2 rounded-lg border border-amber-300 bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
-                    />
+                  <div className="grid sm:grid-cols-2 gap-2.5">
+                    <div className="space-y-1">
+                      <label className="block text-[11px] font-bold text-amber-900">
+                        IRDAI Override Reason Tag
+                      </label>
+                      <select
+                        value={overrideReasonTag}
+                        onChange={(e) => setOverrideReasonTag(e.target.value)}
+                        className="w-full text-xs px-3 py-2 rounded-lg border border-amber-300 bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      >
+                        <option value="FALSE_POSITIVE_GENUINE_DAMAGE">
+                          False Positive — Genuine Damage Verified
+                        </option>
+                        <option value="FALSE_POSITIVE_LIGHTING_ARTIFACT">
+                          False Positive — Screen/Lighting Artifact
+                        </option>
+                        <option value="CONFIRMED_FRAUD_MISMATCH">
+                          Confirmed Fraud / Plate or Reuse Mismatch
+                        </option>
+                        <option value="POLICY_EXCEPTION">
+                          Special Underwriting / Policy Exception
+                        </option>
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="block text-[11px] font-bold text-amber-900">
+                        Reviewer Note
+                      </label>
+                      <input
+                        type="text"
+                        value={reviewerNote}
+                        onChange={(e) => setReviewerNote(e.target.value)}
+                        placeholder="Verified physical vehicle image; approving provisional estimate."
+                        className="w-full text-xs px-3 py-2 rounded-lg border border-amber-300 bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      />
+                    </div>
                   </div>
                   <div className="flex items-center gap-2.5 pt-1 flex-wrap">
                     <button
@@ -515,8 +579,8 @@ export default function EvidenceVerify() {
                 </div>
               )}
 
-              {/* Vehicle Category Mismatch Red Alert Banner */}
-              {isMismatch && (
+              {/* Vehicle Category Mismatch or Non-Vehicle Red Alert Banner */}
+              {isMismatch ? (
                 <div className="flex items-start gap-2.5 bg-red-50 border border-red-300 text-red-800 rounded-xl p-3.5 text-xs">
                   <XCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
                   <div className="space-y-0.5">
@@ -529,7 +593,26 @@ export default function EvidenceVerify() {
                     </p>
                   </div>
                 </div>
-              )}
+              ) : report.decision === 'REJECT' &&
+                report.reasons?.some(
+                  (r) =>
+                    r.includes('NON_VEHICLE_PERSON_SELFIE') ||
+                    r.includes('NON_VEHICLE_OBJECT_DETECTED') ||
+                    r.includes('NO_VEHICLE_DETECTED_REJECTED'),
+                ) ? (
+                <div className="flex items-start gap-2.5 bg-red-50 border border-red-300 text-red-800 rounded-xl p-3.5 text-xs">
+                  <XCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+                  <div className="space-y-0.5">
+                    <div className="font-extrabold text-red-900">
+                      No Motor Vehicle Detected — Upload Rejected
+                    </div>
+                    <p>
+                      The 5-stage pipeline rejected this image because a person/selfie or non-vehicle scene was detected instead of a damaged{' '}
+                      <strong>{formatCategoryLabel(claimedCat)}</strong>. Estimate blocked (₹0).
+                    </p>
+                  </div>
+                </div>
+              ) : null}
 
               {/* Claimed vs Detected Vehicle Category Row */}
               <div className="grid grid-cols-2 gap-3">
@@ -670,7 +753,9 @@ export default function EvidenceVerify() {
                         {report?.decision === 'REJECT'
                           ? isMismatch
                             ? 'Rejected due to Vehicle Category Mismatch — ₹0 claim estimate issued.'
-                            : 'File rejected at Stage 1 — ₹0 claim estimate issued.'
+                            : report.reasons?.some((r) => r.includes('NON_VEHICLE') || r.includes('NO_VEHICLE'))
+                              ? 'Rejected because no motor vehicle was detected — ₹0 claim estimate issued.'
+                              : 'File rejected at Stage 1 — ₹0 claim estimate issued.'
                           : 'No damage instances detected for the claimed vehicle type.'}
                       </td>
                     </tr>

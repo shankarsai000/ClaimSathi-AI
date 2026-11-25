@@ -27,16 +27,19 @@ from .vehicle_detection.detector import (
     normalize_vehicle_type,
     run_stage3a_vehicle_detection,
 )
+from .vehicle_identity import verify_vehicle_identity_binding, verify_vehicle_identity_binding_async
 
 
 class EvidenceVerificationPipeline:
-    """Orchestrates local 5-stage image verification, 2W/4W mismatch screening, and INR cost estimation."""
+    """Orchestrates local 5-stage image verification, 2W/4W mismatch screening, vehicle identity, and INR cost band."""
 
     async def verify_bytes(
         self,
         file_bytes: bytes,
         filename: str,
         claimed_vehicle_type: str = "four_wheeler",
+        vehicle_make_model: Optional[str] = None,
+        claimed_registration: Optional[str] = None,
         storage_dir: Optional[Path] = None,
         persist: bool = True,
     ) -> Dict[str, Any]:
@@ -51,7 +54,17 @@ class EvidenceVerificationPipeline:
 
         if not stage1["stage1_passed"]:
             stage5 = aggregate_risk(stage1=stage1, claimed_vehicle_type=normalized_claimed)
-            cost_estimate = estimate_damage_cost([], decision=stage5["decision"])
+            cost_estimate = estimate_damage_cost(
+                [],
+                decision=stage5["decision"],
+                vehicle_make_model=vehicle_make_model,
+                claimed_vehicle_type=normalized_claimed,
+            )
+            vehicle_identity = verify_vehicle_identity_binding(
+                file_bytes=file_bytes,
+                filename=clean_filename,
+                claimed_registration=claimed_registration,
+            )
             elapsed_ms = round((time.perf_counter() - started) * 1000.0, 2)
             result = {
                 "id": verification_id,
@@ -68,6 +81,7 @@ class EvidenceVerificationPipeline:
                 "context_valid": False,
                 "reasons": stage5["reasons"],
                 "cost_estimate": cost_estimate,
+                "vehicle_identity": vehicle_identity,
                 "stage_results": {
                     "claimed_vehicle_type": normalized_claimed,
                     "detected_vehicle_category": "unknown",
@@ -79,6 +93,7 @@ class EvidenceVerificationPipeline:
                     "stage4_spoof": None,
                     "stage5_risk": stage5,
                     "cost_estimate": cost_estimate,
+                    "vehicle_identity": vehicle_identity,
                 },
                 "processing_time_ms": elapsed_ms,
                 "created_at": created_at,
@@ -100,6 +115,11 @@ class EvidenceVerificationPipeline:
             stage3a_category=stage3a_category,
             stage3a_four_wheeler_conf=float(stage3_vehicle.get("four_wheeler_max_confidence", 0.0)),
             stage3a_two_wheeler_conf=float(stage3_vehicle.get("two_wheeler_max_confidence", 0.0)),
+            stage3a_vehicle_detected=bool(stage3_vehicle.get("vehicle_detected", False)),
+            stage3a_person_detected=bool(stage3_vehicle.get("person_detected", False)),
+            stage3a_non_vehicle_subject_detected=bool(stage3_vehicle.get("non_vehicle_subject_detected", False)),
+            stage3a_person_bboxes=stage3_vehicle.get("person_bboxes") or [],
+            stage3a_vehicle_bboxes=[d["bbox"] for d in stage3_vehicle.get("detections", []) if "bbox" in d],
         )
         detected_vehicle_category = stage3_damage.get("resolved_vehicle_category", stage3a_category)
 
@@ -140,10 +160,30 @@ class EvidenceVerificationPipeline:
             vehicle_category_mismatch=vehicle_category_mismatch,
         )
 
-        # Track A: Lightweight INR Cost Estimator
+        # Track A: Make/Model Tiered INR Cost Estimator & Pixel-Level Vehicle Identity Binding
+        vehicle_identity = await verify_vehicle_identity_binding_async(
+            file_bytes=file_bytes,
+            filename=clean_filename,
+            claimed_registration=claimed_registration,
+            exif_metadata=stage2,
+            run_visual_ocr=bool(claimed_registration),
+        )
+
+        # Escalate PASS -> REVIEW if detected physical plate conflicts with claimed registration
+        if vehicle_identity.get("plate_match_status") == "MISMATCH_FLAGGED":
+            stage5_reasons = list(stage5.get("reasons") or [])
+            if "VEHICLE_REGISTRATION_PLATE_MISMATCH" not in stage5_reasons:
+                stage5_reasons.append("VEHICLE_REGISTRATION_PLATE_MISMATCH")
+            stage5["reasons"] = stage5_reasons
+            if stage5.get("decision") == "PASS":
+                stage5["decision"] = "REVIEW"
+                stage5["requires_human_review"] = True
+
         cost_estimate = estimate_damage_cost(
             damages=stage3_damage.get("detections", []),
             decision=stage5["decision"],
+            vehicle_make_model=vehicle_make_model,
+            claimed_vehicle_type=normalized_claimed,
         )
 
         elapsed_ms = round((time.perf_counter() - started) * 1000.0, 2)
@@ -162,6 +202,7 @@ class EvidenceVerificationPipeline:
             "context_valid": context_valid,
             "reasons": stage5["reasons"],
             "cost_estimate": cost_estimate,
+            "vehicle_identity": vehicle_identity,
             "stage_results": {
                 "claimed_vehicle_type": normalized_claimed,
                 "detected_vehicle_category": detected_vehicle_category,
@@ -173,6 +214,7 @@ class EvidenceVerificationPipeline:
                 "stage4_spoof": stage4_spoof,
                 "stage5_risk": stage5,
                 "cost_estimate": cost_estimate,
+                "vehicle_identity": vehicle_identity,
             },
             "processing_time_ms": elapsed_ms,
             "created_at": created_at,
@@ -198,6 +240,8 @@ async def verify_evidence_image(
     file_bytes: bytes,
     filename: str,
     claimed_vehicle_type: str = "four_wheeler",
+    vehicle_make_model: Optional[str] = None,
+    claimed_registration: Optional[str] = None,
     storage_dir: Optional[Path] = None,
     persist: bool = True,
 ) -> Dict[str, Any]:
@@ -206,6 +250,8 @@ async def verify_evidence_image(
         file_bytes=file_bytes,
         filename=filename,
         claimed_vehicle_type=claimed_vehicle_type,
+        vehicle_make_model=vehicle_make_model,
+        claimed_registration=claimed_registration,
         storage_dir=storage_dir,
         persist=persist,
     )

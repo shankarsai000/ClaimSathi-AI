@@ -76,13 +76,13 @@
   },
   {
     "file": "04_no_vehicle_review/non_vehicle_texture_01.jpg",
-    "expected_decision": "REVIEW",
-    "reason": "No vehicle or damage detected"
+    "expected_decision": "REJECT",
+    "reason": "No vehicle or damage detected — direct reject"
   },
   {
     "file": "04_no_vehicle_review/non_vehicle_texture_02.jpg",
-    "expected_decision": "REVIEW",
-    "reason": "No vehicle or damage detected"
+    "expected_decision": "REJECT",
+    "reason": "No vehicle or damage detected — direct reject"
   },
   {
     "file": "05_corrupted_reject/corrupted_payload.jpg",

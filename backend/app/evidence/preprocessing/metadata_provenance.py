@@ -111,4 +111,9 @@ def run_stage2_metadata_provenance(file_bytes: bytes) -> Dict[str, Any]:
         "editing_software_detected": editing_software_detected,
         "c2pa_present": c2pa_present,
         "metadata_risk_score": metadata_risk_score,
+        "provenance_advisory_only": True,
+        "provenance_disclaimer": (
+            "Advisory signal only: absence of C2PA/SynthID never proves authenticity "
+            "and is stripped by messaging apps. Primary fraud shield is Stage 5 Guided Live Camera + 64-bit pHash."
+        ),
     }

@@ -315,22 +315,34 @@ def extract_image_metadata_and_provenance(file_bytes: bytes) -> Dict[str, Any]:
 
 
 # ── Check D: Randomized Guided Live Capture Instructions ───────────────
-LIVE_CAPTURE_PROMPTS_POOL = [
-    "Show the front view of the vehicle clearly including the registration number plate.",
-    "Move slowly to the damaged area and hold the camera steady for 3 seconds at a 45-degree angle.",
-    "Show the left side profile and rear bumper of the vehicle in a single continuous frame.",
+LIVE_CAPTURE_IDENTITY_PROMPTS: List[str] = [
+    "Show the front or rear vehicle registration number plate alongside the odometer / chassis VIN plate.",
+]
+
+LIVE_CAPTURE_DAMAGE_PROMPTS: List[str] = [
+    "Move slowly to the damaged area and hold steady for 3 seconds at a 45-degree angle.",
     "Capture a close-up of the impact point showing paint transfer, dent depth, or broken parts.",
-    "Capture a wide-angle view showing the full vehicle context and surrounding landmarks.",
+]
+
+LIVE_CAPTURE_DOCUMENT_PROMPTS: List[str] = [
+    "Show the wide-angle vehicle profile together with your RC (Registration Certificate) and Driver License.",
+    "Capture the left/right side profile of the full vehicle followed by the RC & Driver License card.",
 ]
 
 
 def generate_randomized_capture_instructions() -> List[str]:
-    """Select 3 randomized guided capture instructions for a live camera session."""
-    selected = random.sample(LIVE_CAPTURE_PROMPTS_POOL, k=3)
+    """
+    Generate 3 structured Stage 5 Guided Live Camera prompts covering mandatory
+    vehicle identity binding (License Plate + Odometer/VIN), angled damage capture,
+    and RC / Driver License verification.
+    """
+    step1 = random.choice(LIVE_CAPTURE_IDENTITY_PROMPTS)
+    step2 = random.choice(LIVE_CAPTURE_DAMAGE_PROMPTS)
+    step3 = random.choice(LIVE_CAPTURE_DOCUMENT_PROMPTS)
     return [
-        f"Step 1: {selected[0]}",
-        f"Step 2: {selected[1]}",
-        f"Step 3: {selected[2]}",
+        f"Step 1 (Identity Binding): {step1}",
+        f"Step 2 (Impact Inspection): {step2}",
+        f"Step 3 (Context & RC/DL): {step3}",
     ]
 
 

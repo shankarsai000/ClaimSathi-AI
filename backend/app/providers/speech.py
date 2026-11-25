@@ -6,13 +6,63 @@ Endpoint: https://api.vachana.ai/api/v1/tts/inference
 
 from abc import ABC, abstractmethod
 import logging
-from typing import Optional
+import re
+from typing import List, Optional
 import httpx
 from fastapi import HTTPException
 from ..config import get_settings
 from ..audio_utils import generate_demo_wav
 
 logger = logging.getLogger("claimsathi.speech")
+
+# Official Gnani Timbre v3.0 case-sensitive inline audio tags (docs.gnani.ai)
+GNANI_TIMBRE_V3_ALLOWED_TAGS = frozenset({
+    "<coughs>",
+    "<excited>",
+    "<exhales>",
+    "<giggle>",
+    "<laugh>",
+    "<pauses>",
+    "<shouting>",
+    "<sigh>",
+    "<slow>",
+    "<sniffles>",
+    "<whispers>",
+    "<yawns>",
+    "<clears throat>",
+})
+_ANY_ANGLE_TAG_RE = re.compile(r"<[^<>]{1,32}>")
+
+# Model-specific voices: v2.5 voices (e.g. Nalini) cannot be sent with timbre-v3.0
+TIMBRE_V25_ONLY_VOICES = frozenset({"nalini"})
+DEFAULT_TIMBRE_V3_VOICE = "Shivani"
+
+
+def extract_gnani_audio_tags(text: str) -> List[str]:
+    """Return all valid Gnani Timbre v3.0 inline audio tags present in text."""
+    return [
+        m.group(0)
+        for m in _ANY_ANGLE_TAG_RE.finditer(text or "")
+        if m.group(0) in GNANI_TIMBRE_V3_ALLOWED_TAGS
+    ]
+
+
+def sanitize_gnani_audio_tags(text: str) -> str:
+    """Keep only official Gnani Timbre v3.0 tags and strip unsupported tags."""
+    if not text:
+        return ""
+    cleaned = _ANY_ANGLE_TAG_RE.sub(
+        lambda m: f" {m.group(0)} " if m.group(0) in GNANI_TIMBRE_V3_ALLOWED_TAGS else " ",
+        text,
+    )
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def strip_gnani_audio_tags(text: str) -> str:
+    """Remove all inline angle-bracket audio tags for clean UI display or v2.5 TTS."""
+    if not text:
+        return ""
+    return re.sub(r"\s+", " ", _ANY_ANGLE_TAG_RE.sub(" ", text)).strip()
 
 
 class SpeechProvider(ABC):
@@ -47,6 +97,18 @@ class GnaniTimbreProvider(SpeechProvider):
     def get_provider_name(self) -> str:
         return f"Gnani Timbre ({self.settings.gnani_tts_model}) [LIVE]"
 
+    def resolve_effective_voice(self, requested_voice: Optional[str] = None) -> str:
+        """Ensure the selected voice is compatible with the active Gnani Timbre model."""
+        model = (self.settings.gnani_tts_model or "timbre-v2.5").lower()
+        is_v3 = "v3" in model
+        raw_voice = (requested_voice or self.settings.gnani_tts_voice or (DEFAULT_TIMBRE_V3_VOICE if is_v3 else "Nalini")).strip()
+        if is_v3 and raw_voice.lower() in TIMBRE_V25_ONLY_VOICES:
+            cfg_voice = (self.settings.gnani_tts_voice or "").strip()
+            if cfg_voice and cfg_voice.lower() not in TIMBRE_V25_ONLY_VOICES:
+                return cfg_voice
+            return DEFAULT_TIMBRE_V3_VOICE
+        return raw_voice
+
     async def synthesize(
         self,
         text: str,
@@ -70,8 +132,21 @@ class GnaniTimbreProvider(SpeechProvider):
 
         endpoint = self.settings.gnani_tts_endpoint
         target_lang = language or self.settings.gnani_tts_language or "hi-IN"
-        target_voice = voice or self.settings.gnani_tts_voice or "Nalini"
         model = self.settings.gnani_tts_model or "timbre-v2.5"
+        is_v3 = "v3" in model.lower()
+        target_voice = self.resolve_effective_voice(voice)
+
+        if is_v3:
+            clean_text = sanitize_gnani_audio_tags(clean_text)
+            if not strip_gnani_audio_tags(clean_text):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Text must contain speakable words in addition to emotion tags.",
+                )
+        else:
+            clean_text = strip_gnani_audio_tags(clean_text)
+            if not clean_text:
+                raise HTTPException(status_code=400, detail="Text cannot be empty for speech synthesis.")
 
         # Headers - NEVER log or leak API key
         headers = {

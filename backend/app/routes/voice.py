@@ -6,7 +6,7 @@ Provides endpoints for Gnani Prisma STT transcription and Gnani Timbre TTS speec
 import json
 from typing import Optional
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
-from ..audio_utils import validate_audio_file
+from ..audio_utils import compute_wav_rms_energy, validate_audio_file
 from ..config import get_settings
 from ..models import (
     ConverseTurnRequest,
@@ -18,8 +18,18 @@ from ..models import (
     SpeechSynthesizeRequest,
     VoiceTranscribeResponse,
 )
-from ..providers.conversation import process_conversational_turn
-from ..providers.speech import GnaniTimbreProvider, MockSpeechProvider
+from ..providers.conversation import (
+    FIELD_ORDER,
+    build_claim_fields_state,
+    has_meaningful_words,
+    process_conversational_turn,
+)
+from ..providers.speech import (
+    GnaniTimbreProvider,
+    MockSpeechProvider,
+    extract_gnani_audio_tags,
+    sanitize_gnani_audio_tags,
+)
 from ..providers.transcription import (
     GnaniPrismaProvider,
     MockTranscriptionProvider,
@@ -29,6 +39,7 @@ from ..providers.transcription import (
     generate_assistant_dialogue,
     generate_code_mixed_slot_reply,
     generate_evidence_narration,
+    transcribe_via_groq_whisper,
 )
 
 router = APIRouter(prefix="/voice", tags=["Voice"])
@@ -47,6 +58,7 @@ async def transcribe_audio_file(
     demo: bool = Form(False, description="Explicit demo mode flag"),
     language_code: Optional[str] = Form(None, description="Optional language override (e.g. hi-IN)"),
     known_fields_json: Optional[str] = Form(None, description="Optional JSON map of already-captured fields"),
+    known_motor_slots_json: Optional[str] = Form(None, description="Optional JSON map of Group A motor slots"),
     history_json: Optional[str] = Form(None, description="Optional JSON array of prior turns"),
     expected_field: Optional[str] = Form(None, description="Optional field currently being answered"),
 ):
@@ -79,18 +91,35 @@ async def transcribe_audio_file(
             language_code=language_code,
         )
     else:
-        # Live Gnani Prisma STT
-        # Note: Will raise HTTPException on failure; NEVER silently substitute mock!
-        result = await live_stt.transcribe(
-            audio_bytes=raw_bytes,
-            filename=filename,
-            content_type=normalized_mime,
-            language_code=language_code,
-        )
+        # Live Gnani Prisma STT with automatic Groq Whisper failover on 402/429/5xx
+        try:
+            result = await live_stt.transcribe(
+                audio_bytes=raw_bytes,
+                filename=filename,
+                content_type=normalized_mime,
+                language_code=language_code,
+            )
+        except HTTPException as stt_exc:
+            if stt_exc.status_code in (402, 429, 500, 502, 503, 504):
+                whisper_res = await transcribe_via_groq_whisper(
+                    audio_bytes=raw_bytes,
+                    filename=filename,
+                    content_type=normalized_mime,
+                    language_code=language_code,
+                )
+                if whisper_res is not None:
+                    result = whisper_res
+                else:
+                    raise
+            else:
+                raise
 
-    # Attach detected duration to request metadata if available
+    # Attach detected duration and audio RMS energy to request metadata if available
     if detected_duration is not None:
         result["request_metadata"]["duration_seconds"] = round(detected_duration, 2)
+    audio_rms = compute_wav_rms_energy(raw_bytes)
+    if audio_rms is not None:
+        result["request_metadata"]["audio_rms"] = audio_rms
 
     known_fields = None
     history = None
@@ -101,6 +130,14 @@ async def transcribe_audio_file(
                 known_fields = parsed_kf
         except Exception:
             known_fields = None
+    known_motor_slots = None
+    if known_motor_slots_json:
+        try:
+            parsed_ms = json.loads(known_motor_slots_json)
+            if isinstance(parsed_ms, dict):
+                known_motor_slots = parsed_ms
+        except Exception:
+            known_motor_slots = None
     if history_json:
         try:
             parsed_h = json.loads(history_json)
@@ -109,16 +146,46 @@ async def transcribe_audio_file(
         except Exception:
             history = None
 
+    raw_transcript = (result.get("transcript") or "").strip()
+    if not has_meaningful_words(raw_transcript):
+        prev_known = {
+            k: (known_fields.get(k) or None) if isinstance(known_fields, dict) else None
+            for k in FIELD_ORDER
+        }
+        resolved_lang = result.get("detected_language") or (
+            language_code if (language_code and language_code != "indic-auto") else "en-IN"
+        )
+        preserved_fields, preserved_missing = build_claim_fields_state(prev_known, resolved_lang)
+        return VoiceTranscribeResponse(
+            transcript="",
+            model=result["model"],
+            detected_language=resolved_lang,
+            is_mock=result["is_mock"],
+            request_metadata=result["request_metadata"],
+            fields=preserved_fields,
+            missing_fields=preserved_missing,
+            assistant_dialogue=None,
+            assistant_speech_text=None,
+            assistant_language=resolved_lang,
+            claimed_vehicle_type=None,
+            vehicle_registration=prev_known.get("policy_reference"),
+            damage_keywords=[],
+            incident_description=prev_known.get("damage_description"),
+            reasoning_trace=None,
+            no_speech_detected=True,
+        )
+
     conv = await process_conversational_turn(
-        message=result["transcript"],
+        message=raw_transcript,
         language=result.get("detected_language") or language_code or "indic-auto",
         known_fields=known_fields,
         history=history,
         expected_field=expected_field,
+        known_motor_slots=known_motor_slots,
     )
 
     return VoiceTranscribeResponse(
-        transcript=result["transcript"],
+        transcript=raw_transcript,
         model=result["model"],
         detected_language=conv["assistant_language"],
         is_mock=result["is_mock"],
@@ -126,12 +193,17 @@ async def transcribe_audio_file(
         fields=conv["fields"],
         missing_fields=conv["missing_fields"],
         assistant_dialogue=conv["reply_text"],
-        assistant_speech_text=conv["reply_text"],
+        assistant_speech_text=conv.get("assistant_speech_text") or conv["reply_text"],
         assistant_language=conv["assistant_language"],
         claimed_vehicle_type=conv.get("claimed_vehicle_type"),
+        vehicle_make_model=conv.get("vehicle_make_model"),
         vehicle_registration=conv.get("vehicle_registration"),
+        claimed_registration=conv.get("claimed_registration"),
+        motor_slots=conv.get("motor_slots"),
         damage_keywords=conv.get("damage_keywords", []),
         incident_description=conv.get("incident_description"),
+        reasoning_trace=conv.get("reasoning_trace"),
+        no_speech_detected=conv.get("no_speech_detected", False),
     )
 
 
@@ -149,6 +221,7 @@ async def converse_with_claim_assistant(request: ConverseTurnRequest):
         known_fields=request.known_fields,
         history=request.history,
         expected_field=request.expected_field,
+        known_motor_slots=request.known_motor_slots,
     )
     return ConverseTurnResponse(**res)
 
@@ -180,7 +253,10 @@ async def extract_voice_slots(request: ExtractSlotsRequest):
     return ExtractSlotsResponse(
         transcript=raw_text,
         claimed_vehicle_type=slots.get("claimed_vehicle_type"),
+        vehicle_make_model=slots.get("vehicle_make_model"),
         vehicle_registration=slots.get("vehicle_registration"),
+        claimed_registration=slots.get("claimed_registration"),
+        motor_slots=slots.get("motor_slots"),
         damage_keywords=slots.get("damage_keywords", []),
         incident_description=slots.get("incident_description") or raw_text,
         detected_language=slots.get("detected_language") or resolved_lang,
@@ -208,6 +284,7 @@ async def narrate_evidence_verdict(request: EvidenceNarrationRequest):
         total_estimated_inr=request.total_estimated_inr,
         damages=request.damages,
         language=request.language,
+        reasons=request.reasons,
     )
     return EvidenceNarrationResponse(**result)
 
@@ -246,12 +323,16 @@ async def synthesize_speech(request: SpeechSynthesizeRequest):
     )
 
     settings = get_settings()
+    is_v3 = "v3" in (settings.gnani_tts_model or "").lower()
+    applied_tags = extract_gnani_audio_tags(sanitize_gnani_audio_tags(request.text)) if is_v3 else []
+    effective_voice = live_tts.resolve_effective_voice(request.voice)
     return Response(
         content=audio_bytes,
         media_type="audio/wav",
         headers={
             "X-ClaimSathi-Provider": f"Gnani-Timbre-{settings.gnani_tts_model}",
-            "X-ClaimSathi-Voice": request.voice or settings.gnani_tts_voice,
+            "X-ClaimSathi-Voice": effective_voice,
+            "X-ClaimSathi-Emotion-Tags": ",".join(applied_tags) or "none",
             "X-ClaimSathi-Demo": "false",
         },
     )

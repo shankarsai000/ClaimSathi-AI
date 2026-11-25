@@ -5,15 +5,24 @@ import { useAppSettings } from '../i18n'
 import type {
   ClaimField,
   VoiceTranscribeResponse,
+  ConversationalReasoningTrace,
   CaptureSessionResponse,
   EvidenceAssetRecord,
   EvidenceVerificationReport,
+  WhatsappHandoffResponse,
   YoloDetectionBox,
+  VoiceIntakeMotorSlots,
+  MotorClaimFormDetails,
+  MotorLossType,
+  MotorUsageType,
+  MotorDriverRelationship,
+  MotorLicenseClass,
+  ClaimSettlementMode,
 } from '../types'
 import ConfidenceBadge from '../components/ConfidenceBadge'
 import ProviderBadge from '../components/ProviderBadge'
 import Spinner from '../components/Spinner'
-import { WavRecorder } from '../utils/wavRecorder'
+import { WavRecorder, type VadState } from '../utils/wavRecorder'
 import { playAudioBlob, stopAudio } from '../utils/audioPlayer'
 import {
   Mic,
@@ -43,6 +52,7 @@ import {
   Bike,
   IndianRupee,
   XCircle,
+  ChevronDown,
 } from 'lucide-react'
 
 interface MessageTurn {
@@ -55,6 +65,7 @@ interface MessageTurn {
   latencyMs?: number
   timestamp: string
   isStreaming?: boolean
+  reasoningTrace?: ConversationalReasoningTrace | null
 }
 
 const INDIAN_LANGUAGES = [
@@ -119,13 +130,98 @@ export default function NewClaim() {
   const [activeMissingIndex, setActiveMissingIndex] = useState(0)
   const [textIntakeInput, setTextIntakeInput] = useState('')
 
-  // Supplemental fields populated cleanly from conversation (no fake defaults)
+  // Supplemental & Formal Motor Claim Fields (Groups A, B, C — pre-filled from profile & voice)
   const [vehicleRegistration, setVehicleRegistration] = useState('')
   const [incidentTime, setIncidentTime] = useState('')
   const [drivableStatus, setDrivableStatus] = useState('')
   const [injuriesReported, setInjuriesReported] = useState('No injuries reported')
   const [policeFirInfo, setPoliceFirInfo] = useState('Not filed')
   const [declarationChecked, setDeclarationChecked] = useState(true)
+  const [motorSlots, setMotorSlots] = useState<VoiceIntakeMotorSlots>({})
+  const [openAccordion, setOpenAccordion] = useState<string>('claimant')
+  const [motorForm, setMotorForm] = useState<MotorClaimFormDetails>(() => {
+    const u = getStoredUser()
+    const todayIso = new Date().toISOString().slice(0, 10)
+    return {
+      claimant_name: u?.name || '',
+      registered_mobile: u?.phone || '',
+      claimant_email: u?.email || '',
+      residential_address: '',
+      pincode: '',
+      other_insurance_exists: false,
+      other_insurance_details: '',
+      loss_type: 'own_damage_accident',
+      incident_time: '',
+      vehicle_usage_type: 'private_social_domestic',
+      pillion_rider_present: false,
+      occupants_count: 1,
+      vehicle_was_parked_unattended: false,
+      injury_or_third_party_flag: false,
+      police_fir_lodged_flag: false,
+      driver_was_owner: true,
+      driver_name: u?.name || '',
+      driver_age: undefined,
+      driver_address: '',
+      driver_relationship: 'owner',
+      driver_license_number: '',
+      driver_license_expiry: '',
+      driver_license_class: undefined,
+      driver_issuing_rto: '',
+      driver_under_intoxication: false,
+      driver_injured: false,
+      claim_settlement_mode: 'cashless',
+      inspection_location: '',
+      preferred_inspection_datetime: '',
+      workshop_name: '',
+      workshop_address: '',
+      workshop_contact: '',
+      approx_estimated_repair_cost_inr: undefined,
+      dpdp_consent_granted: false,
+      dpdp_consent_timestamp: '',
+      truthfulness_declaration_accepted: true,
+      declaration_place: '',
+      declaration_date: todayIso,
+      insured_digital_signature: u?.name || '',
+      bank_account_holder_name: u?.name || '',
+      bank_account_number: '',
+      bank_ifsc_code: '',
+      bank_branch_name: '',
+      fir_or_gd_number: '',
+      police_station_name: '',
+      fir_report_date: '',
+      fir_complainant_name: u?.name || '',
+      non_traceable_report_status: 'pending',
+      all_original_keys_available: true,
+      financier_hypothecated: false,
+      financier_name: '',
+      stolen_accessories_details: '',
+      third_party_loss_type: 'injury',
+      third_party_injured_count: 0,
+      hospital_and_treatment_details: '',
+      third_party_vehicle_reg: '',
+      third_party_policy_details: '',
+      third_party_damage_summary: '',
+      witness_name: '',
+      witness_contact: '',
+      fire_brigade_report_number: '',
+    }
+  })
+
+  const updateMotorForm = (patch: Partial<MotorClaimFormDetails>) => {
+    setMotorForm((prev) => {
+      const next = { ...prev, ...patch }
+      if (next.driver_was_owner) {
+        if ('claimant_name' in patch || patch.driver_was_owner === true) {
+          next.driver_name = next.claimant_name || next.driver_name || ''
+        }
+        if ('residential_address' in patch || patch.driver_was_owner === true) {
+          next.driver_address = next.residential_address || next.driver_address || ''
+        }
+        next.driver_relationship = 'owner'
+      }
+      return next
+    })
+  }
 
   // Conversation turns history
   const [messages, setMessages] = useState<MessageTurn[]>([
@@ -146,12 +242,31 @@ export default function NewClaim() {
   const [selectedLanguage, setSelectedLanguage] = useState<string>('indic-auto')
   const [lockedLanguage, setLockedLanguage] = useState<string | null>(null)
   const [autoVoiceEnabled, setAutoVoiceEnabled] = useState(true)
+  const [handsFreeMode, setHandsFreeMode] = useState(false)
+  const [vadState, setVadState] = useState<VadState>('calibrating')
+  const [voiceNotice, setVoiceNotice] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [hasStartedIntake, setHasStartedIntake] = useState(false)
 
   // Live browser SpeechRecognition parallel capture (real-speech fallback if external STT fails)
   const speechRecRef = useRef<any>(null)
   const liveBrowserTranscriptRef = useRef<string>('')
+  const handsFreeModeRef = useRef(false)
+  const isProcessingTurnRef = useRef(false)
+  const hasStartedIntakeRef = useRef(false)
+  const missingFieldsRef = useRef<string[]>([])
+  const wizardStepRef = useRef<1 | 2 | 3>(1)
+  const isPlayingAudioRef = useRef(false)
+  const isRecordingRef = useRef(false)
+  const isAnswerRecordingRef = useRef(false)
+  const autoListenTimerRef = useRef<number | null>(null)
+  const browserSpeechResolveRef = useRef<((completed: boolean) => void) | null>(null)
+  const startRecordingRef = useRef<() => Promise<void>>(async () => {})
+  const stopRecordingRef = useRef<() => Promise<void>>(async () => {})
+  const cancelRecordingRef = useRef<() => void>(() => {})
+  const startAnswerRecordingRef = useRef<() => Promise<void>>(async () => {})
+  const stopAnswerRecordingRef = useRef<() => Promise<void>>(async () => {})
+  const cancelAnswerRecordingRef = useRef<() => void>(() => {})
 
   const startBrowserSpeechCapture = (langHint?: string) => {
     liveBrowserTranscriptRef.current = ''
@@ -168,7 +283,12 @@ export default function NewClaim() {
         for (let i = 0; i < event.results.length; i++) {
           combined += event.results[i][0].transcript + ' '
         }
-        liveBrowserTranscriptRef.current = combined.trim()
+        const cleaned = combined.trim()
+        if (cleaned.length > liveBrowserTranscriptRef.current.length) {
+          liveBrowserTranscriptRef.current = cleaned
+          recorderRef.current?.notifyExternalSpeechActivity()
+          answerRecorderRef.current?.notifyExternalSpeechActivity()
+        }
       }
       rec.onerror = () => {}
       rec.start()
@@ -260,7 +380,7 @@ export default function NewClaim() {
   // Audio Recording (Main Claim Description)
   const [isRecording, setIsRecording] = useState(false)
   const [recordingSeconds, setRecordingSeconds] = useState(0)
-  const [, setAudioVolume] = useState(0)
+  const [audioVolume, setAudioVolume] = useState(0)
   const recorderRef = useRef<WavRecorder | null>(null)
   const timerRef = useRef<number | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -282,6 +402,7 @@ export default function NewClaim() {
 
   // Step 2: Evidence Collection & Guided Live Camera Capture state
   const [evidenceList, setEvidenceList] = useState<EvidenceAssetRecord[]>([])
+  const [evidenceAiDecisions, setEvidenceAiDecisions] = useState<Record<string, 'PASS' | 'REVIEW' | 'REJECT'>>({})
   const [uploadingEvidence, setUploadingEvidence] = useState(false)
   const [captureSession, setCaptureSession] = useState<CaptureSessionResponse | null>(null)
   const [cameraActive, setCameraActive] = useState(false)
@@ -289,12 +410,20 @@ export default function NewClaim() {
   const mediaStreamRef = useRef<MediaStream | null>(null)
   const evidenceInputRef = useRef<HTMLInputElement | null>(null)
 
-  // Sprint 1.8: 5-Stage AI Evidence Intelligence & INR Cost Estimator state
+  // Sprint 1.8 / 2.0 / 2.1: 5-Stage AI Evidence Intelligence, Identity Binding, Live-Camera Lock & DPDP Consent
   const [claimedVehicleType, setClaimedVehicleType] = useState<'four_wheeler' | 'two_wheeler'>('four_wheeler')
+  const [vehicleMakeModel, setVehicleMakeModel] = useState<string>('')
+  const [whatsappHandoff, setWhatsappHandoff] = useState<WhatsappHandoffResponse | null>(null)
+  const [isHandoffCameraLocked, setIsHandoffCameraLocked] = useState<boolean>(false)
+  const [dpdpPreCaptureConsent, setDpdpPreCaptureConsent] = useState<boolean>(true)
   const [aiVerificationResult, setAiVerificationResult] = useState<EvidenceVerificationReport | null>(null)
   const [isVerifyingEvidence, setIsVerifyingEvidence] = useState(false)
   const [selectedEvidenceFile, setSelectedEvidenceFile] = useState<File | null>(null)
   const [evidencePreviewUrl, setEvidencePreviewUrl] = useState<string | null>(null)
+  const speechSessionIdRef = useRef<number>(0)
+  const activeSpeechTextRef = useRef<string | null>(null)
+  const verificationReqIdRef = useRef<number>(0)
+  const narrationTimerRef = useRef<number | null>(null)
 
   // Conversation scroll container ref
   const chatScrollRef = useRef<HTMLDivElement | null>(null)
@@ -306,31 +435,116 @@ export default function NewClaim() {
     }
   }, [evidencePreviewUrl])
 
-  // Synchronize claimed vehicle category from conversational vehicle_type field
+  // Parse tokenized WhatsApp -> Stage 5 Live Camera URL query params and enforce camera-only lock
   useEffect(() => {
-    const vtField = (fields.find((f) => f.name === 'vehicle_type')?.value || '').toLowerCase()
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const handoffSession = params.get('capture_session_id')
+    const urlClaimId = params.get('claim_id')
+    const urlStep = params.get('step')
+    if (handoffSession) {
+      setIsHandoffCameraLocked(true)
+      setCaptureSession({
+        session_id: handoffSession,
+        claim_id: urlClaimId,
+        instructions: [
+          'Step 1 (Identity Binding): Show the front or rear vehicle registration plate alongside odometer / VIN.',
+          'Step 2 (Impact Inspection): Hold steady on damaged area at a 45-degree angle.',
+          'Step 3 (Context & RC/DL): Capture vehicle side profile with RC and Driver License.',
+        ],
+        created_at: new Date().toISOString(),
+        expires_in_seconds: 900,
+      })
+      if (urlClaimId) setActiveClaimId(urlClaimId)
+      if (urlStep === '2') setWizardStep(2)
+    }
+  }, [])
+
+  // Helper: map any Step-1 vehicle_type string strictly to two_wheeler | four_wheeler | null
+  const deriveVehicleCategoryFromField = (raw?: string | null): 'two_wheeler' | 'four_wheeler' | null => {
+    const vtField = (raw || '').trim().toLowerCase()
+    if (!vtField) return null
     if (
       vtField.includes('bike') ||
+      vtField.includes('motorbike') ||
       vtField.includes('motorcycle') ||
       vtField.includes('two wheeler') ||
       vtField.includes('two-wheeler') ||
+      vtField.includes('two_wheeler') ||
       vtField.includes('2 wheeler') ||
       vtField.includes('2-wheeler') ||
-      vtField.includes('scooter')
+      vtField.includes('2w') ||
+      vtField.includes('scooter') ||
+      vtField.includes('scooty') ||
+      vtField.includes('moped') ||
+      vtField.includes('activa') ||
+      vtField.includes('pulsar') ||
+      vtField.includes('bullet') ||
+      vtField.includes('royal enfield') ||
+      vtField.includes('बाइक') ||
+      vtField.includes('బైక్') ||
+      vtField.includes('ಬೈಕ್') ||
+      vtField.includes('பைக்')
     ) {
-      setClaimedVehicleType('two_wheeler')
-    } else if (
+      return 'two_wheeler'
+    }
+    if (
       vtField.includes('car') ||
       vtField.includes('sedan') ||
       vtField.includes('suv') ||
+      vtField.includes('hatchback') ||
       vtField.includes('four wheeler') ||
       vtField.includes('four-wheeler') ||
+      vtField.includes('four_wheeler') ||
       vtField.includes('4 wheeler') ||
-      vtField.includes('4-wheeler')
+      vtField.includes('4-wheeler') ||
+      vtField.includes('4w') ||
+      vtField.includes('कार') ||
+      vtField.includes('కార్') ||
+      vtField.includes('ಕಾರ್') ||
+      vtField.includes('கார்')
     ) {
-      setClaimedVehicleType('four_wheeler')
+      return 'four_wheeler'
+    }
+    return null
+  }
+
+  // Synchronize claimed vehicle category from conversational vehicle_type field
+  useEffect(() => {
+    const vtRaw = fields.find((f) => f.name === 'vehicle_type')?.value
+    const mapped = deriveVehicleCategoryFromField(vtRaw)
+    if (mapped) {
+      setClaimedVehicleType(mapped)
     }
   }, [fields])
+
+  useEffect(() => {
+    handsFreeModeRef.current = handsFreeMode
+  }, [handsFreeMode])
+
+  useEffect(() => {
+    isPlayingAudioRef.current = isPlayingAudio
+  }, [isPlayingAudio])
+
+  useEffect(() => {
+    isRecordingRef.current = isRecording
+  }, [isRecording])
+
+  useEffect(() => {
+    isAnswerRecordingRef.current = isAnswerRecording
+  }, [isAnswerRecording])
+
+  useEffect(() => {
+    hasStartedIntakeRef.current = hasStartedIntake
+  }, [hasStartedIntake])
+
+  useEffect(() => {
+    missingFieldsRef.current = missingFields
+  }, [missingFields])
+
+  useEffect(() => {
+    wizardStepRef.current = wizardStep
+  }, [wizardStep])
 
   useEffect(() => {
     api
@@ -346,6 +560,8 @@ export default function NewClaim() {
       stopAudio()
       stopLiveCamera()
       stopBrowserSpeechCapture()
+      if (autoListenTimerRef.current) clearTimeout(autoListenTimerRef.current)
+      if (narrationTimerRef.current) clearTimeout(narrationTimerRef.current)
       if (timerRef.current) clearInterval(timerRef.current)
       if (recorderRef.current) recorderRef.current.cancel()
       if (answerTimerRef.current) clearInterval(answerTimerRef.current)
@@ -361,18 +577,28 @@ export default function NewClaim() {
 
   const [extractedSlotsSummary, setExtractedSlotsSummary] = useState<{
     vehicleType?: 'two_wheeler' | 'four_wheeler' | null
+    makeModel?: string | null
     registration?: string | null
     damages?: string[]
+    motorSlots?: VoiceIntakeMotorSlots | null
   } | null>(null)
 
   const syncExtractedSlots = (slots: {
     claimed_vehicle_type?: 'two_wheeler' | 'four_wheeler' | null
+    vehicle_make_model?: string | null
     vehicle_registration?: string | null
+    claimed_registration?: string | null
+    motor_slots?: VoiceIntakeMotorSlots | null
     policy_reference?: string | null
     incident_date?: string | null
+    incident_location?: string | null
     damage_keywords?: string[]
     incident_description?: string | null
   }) => {
+    const resolvedMakeModel = slots.vehicle_make_model || slots.motor_slots?.vehicle_make_model || null
+    if (resolvedMakeModel) {
+      setVehicleMakeModel(resolvedMakeModel)
+    }
     if (slots.claimed_vehicle_type === 'two_wheeler' || slots.claimed_vehicle_type === 'four_wheeler') {
       const vt = slots.claimed_vehicle_type
       setClaimedVehicleType(vt)
@@ -385,7 +611,7 @@ export default function NewClaim() {
       )
       setMissingFields((prev) => prev.filter((m) => m !== 'vehicle_type'))
     }
-    const resolvedReg = slots.vehicle_registration || slots.policy_reference
+    const resolvedReg = slots.claimed_registration || slots.vehicle_registration || slots.policy_reference
     if (resolvedReg) {
       setVehicleRegistration((prev) => (slots.vehicle_registration ? slots.vehicle_registration : prev || resolvedReg))
       setFields((prev) =>
@@ -400,62 +626,146 @@ export default function NewClaim() {
     if (slots.incident_date) {
       setIncidentTime((prev) => prev || slots.incident_date!)
     }
-    if (slots.incident_description) {
-      setFields((prev) =>
-        prev.map((f) =>
-          f.name === 'damage_description' && (!f.value || f.confidence === 'missing')
-            ? { ...f, value: slots.incident_description!, confidence: 'high' }
-            : f
-        )
-      )
-      setMissingFields((prev) => prev.filter((m) => m !== 'damage_description'))
+    if (slots.incident_location) {
+      setMotorForm((prev) => (prev.declaration_place ? prev : { ...prev, declaration_place: slots.incident_location || '' }))
     }
-    if (slots.claimed_vehicle_type || slots.vehicle_registration || (slots.damage_keywords && slots.damage_keywords.length > 0)) {
+
+    const ms = slots.motor_slots
+    if (ms && Object.keys(ms).length > 0) {
+      setMotorSlots((prev) => ({ ...prev, ...ms }))
+      if (ms.incident_time) {
+        setIncidentTime((prev) => prev || ms.incident_time || '')
+      }
+      if (ms.injury_or_third_party_flag === true) {
+        setInjuriesReported('Injury / Third-party involvement reported')
+      }
+      if (ms.police_fir_lodged_flag === true) {
+        setPoliceFirInfo('FIR / Police Report Lodged')
+      } else if (ms.police_fir_lodged_flag === false) {
+        setPoliceFirInfo('Not filed')
+      }
+      setMotorForm((prev) => ({
+        ...prev,
+        loss_type: ms.loss_type ?? prev.loss_type,
+        incident_time: ms.incident_time || prev.incident_time,
+        vehicle_usage_type: ms.vehicle_usage_type ?? prev.vehicle_usage_type,
+        pillion_rider_present: ms.pillion_rider_present !== undefined && ms.pillion_rider_present !== null ? ms.pillion_rider_present : prev.pillion_rider_present,
+        occupants_count: ms.occupants_count !== undefined && ms.occupants_count !== null ? ms.occupants_count : prev.occupants_count,
+        driver_was_owner: ms.driver_was_owner !== undefined && ms.driver_was_owner !== null ? ms.driver_was_owner : prev.driver_was_owner,
+        driver_name: ms.driver_name || (ms.driver_was_owner === true ? prev.claimant_name || prev.driver_name : prev.driver_name),
+        driver_relationship: ms.driver_relationship ?? prev.driver_relationship,
+        injury_or_third_party_flag: ms.injury_or_third_party_flag !== undefined && ms.injury_or_third_party_flag !== null ? ms.injury_or_third_party_flag : prev.injury_or_third_party_flag,
+        police_fir_lodged_flag: ms.police_fir_lodged_flag !== undefined && ms.police_fir_lodged_flag !== null ? ms.police_fir_lodged_flag : prev.police_fir_lodged_flag,
+        inspection_location: ms.inspection_location || prev.inspection_location,
+      }))
+    }
+
+    if (slots.claimed_vehicle_type || resolvedMakeModel || slots.vehicle_registration || (slots.damage_keywords && slots.damage_keywords.length > 0) || (ms && Object.keys(ms).length > 0)) {
       setExtractedSlotsSummary((prev) => ({
         vehicleType: slots.claimed_vehicle_type || prev?.vehicleType || null,
-        registration: slots.vehicle_registration || prev?.registration || null,
+        makeModel: resolvedMakeModel || prev?.makeModel || null,
+        registration: slots.claimed_registration || slots.vehicle_registration || prev?.registration || null,
         damages: slots.damage_keywords?.length ? slots.damage_keywords : prev?.damages || [],
+        motorSlots: ms ? { ...(prev?.motorSlots || {}), ...ms } : prev?.motorSlots || null,
       }))
     }
   }
 
-  const speakViaBrowserSpeech = (text: string, targetLang: string) => {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return false
-    try {
-      window.speechSynthesis.cancel()
-      const utter = new SpeechSynthesisUtterance(text)
-      utter.lang = targetLang
-      utter.rate = 1.0
-      utter.onend = () => {
-        setIsPlayingAudio(false)
-        setActiveSpeechText(null)
-      }
-      utter.onerror = () => {
-        setIsPlayingAudio(false)
-        setActiveSpeechText(null)
-      }
-      setIsPlayingAudio(true)
-      window.speechSynthesis.speak(utter)
-      return true
-    } catch {
-      return false
+  const cancelAllSpeechOutput = () => {
+    speechSessionIdRef.current += 1
+    stopAudio()
+    if (autoListenTimerRef.current) {
+      clearTimeout(autoListenTimerRef.current)
+      autoListenTimerRef.current = null
     }
+    if (narrationTimerRef.current) {
+      clearTimeout(narrationTimerRef.current)
+      narrationTimerRef.current = null
+    }
+    if (browserSpeechResolveRef.current) {
+      const r = browserSpeechResolveRef.current
+      browserSpeechResolveRef.current = null
+      r(false)
+    }
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel()
+    }
+    isPlayingAudioRef.current = false
+    activeSpeechTextRef.current = null
+    setIsSynthesizing(false)
+    setIsPlayingAudio(false)
+    setActiveSpeechText(null)
   }
 
-  // ── Speech Synthesis with Gnani Timbre + Browser speechSynthesis Fallback ──
-  const speakText = async (text: string, langCode?: string) => {
-    if (isPlayingAudio) {
-      stopAudio()
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        window.speechSynthesis.cancel()
-      }
-      setIsPlayingAudio(false)
-      setActiveSpeechText(null)
-      return
+  const speakViaBrowserSpeech = (
+    text: string,
+    targetLang: string,
+    rate = 1.0,
+    pitch = 1.0,
+    sessionId?: number,
+  ): Promise<boolean> => {
+    const cleanSpeech = (text || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+    if (!cleanSpeech || typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      return Promise.resolve(false)
     }
+    if (sessionId !== undefined && sessionId !== speechSessionIdRef.current) {
+      return Promise.resolve(false)
+    }
+    return new Promise((resolve) => {
+      try {
+        stopAudio()
+        window.speechSynthesis.cancel()
+        browserSpeechResolveRef.current = resolve
+        const utter = new SpeechSynthesisUtterance(cleanSpeech)
+        utter.lang = targetLang
+        utter.rate = rate
+        utter.pitch = pitch
+        utter.onend = () => {
+          browserSpeechResolveRef.current = null
+          isPlayingAudioRef.current = false
+          activeSpeechTextRef.current = null
+          setIsPlayingAudio(false)
+          setActiveSpeechText(null)
+          resolve(sessionId === undefined || sessionId === speechSessionIdRef.current)
+        }
+        utter.onerror = () => {
+          browserSpeechResolveRef.current = null
+          isPlayingAudioRef.current = false
+          activeSpeechTextRef.current = null
+          setIsPlayingAudio(false)
+          setActiveSpeechText(null)
+          resolve(false)
+        }
+        isPlayingAudioRef.current = true
+        setIsPlayingAudio(true)
+        window.speechSynthesis.speak(utter)
+      } catch {
+        browserSpeechResolveRef.current = null
+        isPlayingAudioRef.current = false
+        resolve(false)
+      }
+    })
+  }
+
+  // ── Speech Synthesis with Gnani Timbre v3 + Browser speechSynthesis Fallback ──
+  const speakText = async (
+    text: string,
+    langCode?: string,
+    rate = 1.0,
+    pitch = 1.0,
+    options?: { toggleIfSame?: boolean },
+  ): Promise<boolean> => {
+    if (options?.toggleIfSame && isPlayingAudioRef.current && activeSpeechTextRef.current === text) {
+      cancelAllSpeechOutput()
+      return false
+    }
+
+    cancelAllSpeechOutput()
+    const mySessionId = ++speechSessionIdRef.current
 
     setLastSpokenSpeech({ text, language: langCode })
     setIsSynthesizing(true)
+    activeSpeechTextRef.current = text
     setActiveSpeechText(text)
     setError('')
 
@@ -476,40 +786,52 @@ export default function NewClaim() {
       const audioBlob = await api.synthesizeSpeech(text, {
         demo: isDemoMode,
         language: targetLang,
-        voice: 'Nalini',
+        speed: rate,
       })
+      if (mySessionId !== speechSessionIdRef.current) {
+        return false
+      }
       setIsSynthesizing(false)
+      isPlayingAudioRef.current = true
       setIsPlayingAudio(true)
 
-      await playAudioBlob(audioBlob)
+      const completedNaturally = await playAudioBlob(audioBlob)
+      if (mySessionId !== speechSessionIdRef.current) {
+        return false
+      }
+      isPlayingAudioRef.current = false
+      activeSpeechTextRef.current = null
       setIsPlayingAudio(false)
       setActiveSpeechText(null)
+      return completedNaturally
     } catch {
-      setIsSynthesizing(false)
-      const spoke = speakViaBrowserSpeech(text, targetLang)
-      if (!spoke) {
-        setIsPlayingAudio(false)
-        setActiveSpeechText(null)
+      if (mySessionId !== speechSessionIdRef.current) {
+        return false
       }
+      setIsSynthesizing(false)
+      const spokeNaturally = await speakViaBrowserSpeech(text, targetLang, rate, pitch, mySessionId)
+      if (mySessionId !== speechSessionIdRef.current) {
+        return false
+      }
+      isPlayingAudioRef.current = false
+      activeSpeechTextRef.current = null
+      setIsPlayingAudio(false)
+      setActiveSpeechText(null)
+      return spokeNaturally
     }
   }
 
   const handleReplayLastVoice = () => {
-    if (isPlayingAudio) {
-      stopAudio()
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        window.speechSynthesis.cancel()
-      }
-      setIsPlayingAudio(false)
-      setActiveSpeechText(null)
+    if (isPlayingAudioRef.current) {
+      cancelAllSpeechOutput()
       return
     }
     if (lastSpokenSpeech) {
-      speakText(lastSpokenSpeech.text, lastSpokenSpeech.language)
+      void speakText(lastSpokenSpeech.text, lastSpokenSpeech.language, 1.0, 1.0, { toggleIfSame: true })
     } else {
       const lastMsg = [...messages].reverse().find((m) => m.sender === 'assistant' && (m.audioText || m.text))
       if (lastMsg) {
-        speakText(lastMsg.audioText || lastMsg.text, lastMsg.language)
+        void speakText(lastMsg.audioText || lastMsg.text, lastMsg.language, 1.0, 1.0, { toggleIfSame: true })
       }
     }
   }
@@ -518,6 +840,8 @@ export default function NewClaim() {
   const applyConversationResult = (
     res: {
       transcript: string
+      no_speech_detected?: boolean
+      is_complete?: boolean
       detected_language?: string | null
       assistant_language?: string | null
       assistant_dialogue?: string | null
@@ -528,12 +852,26 @@ export default function NewClaim() {
       model?: string
       request_metadata?: { duration_seconds?: number; processing_time?: number }
       claimed_vehicle_type?: 'two_wheeler' | 'four_wheeler' | null
+      vehicle_make_model?: string | null
       vehicle_registration?: string | null
+      claimed_registration?: string | null
+      motor_slots?: VoiceIntakeMotorSlots | null
       damage_keywords?: string[]
       incident_description?: string | null
+      reasoning_trace?: ConversationalReasoningTrace | null
     },
     procTurnId?: string,
   ) => {
+    if (res.no_speech_detected || !(res.transcript || '').trim()) {
+      if (procTurnId) {
+        setMessages((prev) => prev.filter((m) => m.id !== procTurnId))
+      }
+      setVoiceNotice('No clear speech was detected — tap the mic and speak clearly whenever you are ready.')
+      return
+    }
+
+    setVoiceNotice('')
+    setHasStartedIntake(true)
     const detectedLang =
       res.assistant_language ||
       res.detected_language ||
@@ -548,14 +886,27 @@ export default function NewClaim() {
     if (res.model) setActiveModel(res.model)
     setActiveMissingIndex(0)
 
+    const mergedVehicleCat = deriveVehicleCategoryFromField(
+      merged.find((f) => f.name === 'vehicle_type')?.value || null,
+    )
     syncExtractedSlots({
-      claimed_vehicle_type: res.claimed_vehicle_type,
+      claimed_vehicle_type: res.claimed_vehicle_type || mergedVehicleCat,
+      vehicle_make_model: res.vehicle_make_model,
       vehicle_registration: res.vehicle_registration,
+      claimed_registration: res.claimed_registration,
+      motor_slots: res.motor_slots,
       policy_reference: merged.find((f) => f.name === 'policy_reference')?.value || null,
       incident_date: merged.find((f) => f.name === 'incident_date')?.value || null,
+      incident_location: merged.find((f) => f.name === 'incident_location')?.value || null,
       damage_keywords: res.damage_keywords,
       incident_description: res.incident_description,
     })
+
+    if (res.reasoning_trace?.drivability_assessment === 'non_drivable_towing_recommended') {
+      setDrivableStatus((prev) => prev || 'No — Towing Recommended (Critical Damage)')
+    } else if (res.reasoning_trace?.drivability_assessment === 'likely_drivable') {
+      setDrivableStatus((prev) => prev || 'Yes — Drivable (Minor Exterior Damage)')
+    }
 
     const userTurn: MessageTurn = {
       id: 'user-' + Date.now(),
@@ -572,8 +923,10 @@ export default function NewClaim() {
     const assistantText =
       res.reply_text ||
       res.assistant_dialogue ||
-      'Thank you, I have noted those details.'
+      'I caught that — let me know what else you would like to add.'
     const assistantSpeech = res.assistant_speech_text || assistantText
+    const speechRate = res.reasoning_trace?.speech_rate ?? 1.0
+    const speechPitch = res.reasoning_trace?.speech_pitch ?? 1.0
 
     const assistantTurn: MessageTurn = {
       id: 'assistant-' + Date.now(),
@@ -582,6 +935,7 @@ export default function NewClaim() {
       audioText: assistantSpeech,
       language: detectedLang,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      reasoningTrace: res.reasoning_trace || null,
     }
 
     setMessages((prev) => [
@@ -590,34 +944,122 @@ export default function NewClaim() {
       assistantTurn,
     ])
 
+    const shouldAutoFollowListen =
+      handsFreeModeRef.current &&
+      wizardStepRef.current === 1 &&
+      !res.is_complete &&
+      remainingMissing.length > 0
+
+    if (res.is_complete && handsFreeModeRef.current) {
+      setHandsFreeMode(false)
+    }
+
+    const triggerHandsFreeReopen = () => {
+      autoListenTimerRef.current = window.setTimeout(() => {
+        if (
+          handsFreeModeRef.current &&
+          wizardStepRef.current === 1 &&
+          !isProcessingTurnRef.current &&
+          !isRecordingRef.current &&
+          !isAnswerRecordingRef.current
+        ) {
+          if (hasStartedIntakeRef.current && missingFieldsRef.current.length > 0) {
+            void startAnswerRecordingRef.current()
+          } else {
+            void startRecordingRef.current()
+          }
+        }
+      }, 450)
+    }
+
     if (autoVoiceEnabled && assistantSpeech) {
-      setTimeout(() => speakText(assistantSpeech, detectedLang), 300)
+      cancelAllSpeechOutput()
+      autoListenTimerRef.current = window.setTimeout(async () => {
+        const completedNaturally = await speakText(assistantSpeech, detectedLang, speechRate, speechPitch)
+        if (completedNaturally && shouldAutoFollowListen && handsFreeModeRef.current && !isProcessingTurnRef.current) {
+          triggerHandsFreeReopen()
+        }
+      }, 200)
+    } else if (shouldAutoFollowListen) {
+      triggerHandsFreeReopen()
+    }
+  }
+
+  const toggleHandsFreeMode = () => {
+    const next = !handsFreeModeRef.current
+    handsFreeModeRef.current = next
+    setHandsFreeMode(next)
+    setVoiceNotice('')
+    if (next) {
+      recorderRef.current?.setAutoStopOnSilence(true)
+      answerRecorderRef.current?.setAutoStopOnSilence(true)
+      if (
+        !isRecordingRef.current &&
+        !isAnswerRecordingRef.current &&
+        !isProcessingTurnRef.current &&
+        !isPlayingAudioRef.current &&
+        !isSynthesizing &&
+        wizardStepRef.current === 1
+      ) {
+        if (hasStartedIntakeRef.current && missingFieldsRef.current.length > 0) {
+          void startAnswerRecordingRef.current()
+        } else {
+          void startRecordingRef.current()
+        }
+      }
+    } else {
+      if (autoListenTimerRef.current) {
+        clearTimeout(autoListenTimerRef.current)
+        autoListenTimerRef.current = null
+      }
+      recorderRef.current?.setAutoStopOnSilence(false)
+      answerRecorderRef.current?.setAutoStopOnSilence(false)
     }
   }
 
   // ── Main Voice Intake Recording ──
   const startRecording = async () => {
-    stopAudio()
+    if (recorderRef.current || answerRecorderRef.current) return
+    cancelAllSpeechOutput()
     setError('')
+    setVoiceNotice('')
+    setVadState('calibrating')
     try {
-      const recorder = new WavRecorder(16000, (vol) => setAudioVolume(vol))
+      const recorder = new WavRecorder(16000, (vol) => setAudioVolume(vol), {
+        autoStopOnSilence: handsFreeModeRef.current,
+        silenceDurationMs: 1500,
+        minSpeechMs: 280,
+        maxInitialSilenceMs: 12000,
+        onVadStateChange: setVadState,
+        onAutoSilenceStop: () => {
+          void stopRecordingRef.current()
+        },
+        onInitialSilenceTimeout: () => {
+          cancelRecordingRef.current()
+          setHandsFreeMode(false)
+          setVoiceNotice('Hands-free paused after 12s of silence — toggle Hands-Free or tap the mic when ready.')
+        },
+      })
       recorderRef.current = recorder
       await recorder.start()
       startBrowserSpeechCapture(effectiveSttLanguage)
 
+      isRecordingRef.current = true
       setIsRecording(true)
       setRecordingSeconds(0)
 
       timerRef.current = window.setInterval(() => {
         setRecordingSeconds((prev) => {
           if (prev >= 29) {
-            stopRecording()
+            void stopRecordingRef.current()
             return 30
           }
           return prev + 1
         })
       }, 1000)
     } catch (err: any) {
+      recorderRef.current = null
+      isRecordingRef.current = false
       setError(err.message || 'Microphone access denied. Grant permission or upload audio.')
       setIsRecording(false)
     }
@@ -631,11 +1073,19 @@ export default function NewClaim() {
     const browserCapturedText = stopBrowserSpeechCapture()
 
     if (!recorderRef.current) return
+    const activeRecorder = recorderRef.current
+    recorderRef.current = null
+    isRecordingRef.current = false
     setIsRecording(false)
+    setAudioVolume(0)
 
     try {
-      const audioBlob = await recorderRef.current.stop()
-      recorderRef.current = null
+      const stats = activeRecorder.getStats()
+      const audioBlob = await activeRecorder.stop()
+      if (!stats.hasSpeech && !browserCapturedText) {
+        setVoiceNotice("I didn't hear any speech in that clip — tap the mic whenever you're ready to speak.")
+        return
+      }
       await handleProcessMainAudio(audioBlob, 'recording.wav', browserCapturedText)
     } catch (err: any) {
       setError(err.message || 'Failed to capture recorded audio.')
@@ -652,14 +1102,17 @@ export default function NewClaim() {
       recorderRef.current.cancel()
       recorderRef.current = null
     }
+    isRecordingRef.current = false
     setIsRecording(false)
     setRecordingSeconds(0)
+    setAudioVolume(0)
   }
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
     setError('')
+    setVoiceNotice('')
     await handleProcessMainAudio(file, file.name)
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
@@ -671,7 +1124,8 @@ export default function NewClaim() {
     browserFallbackTranscript: string = '',
   ) => {
     setError('')
-    setHasStartedIntake(true)
+    setVoiceNotice('')
+    isProcessingTurnRef.current = true
 
     const procTurnId = 'proc-' + Date.now()
     setMessages((prev) => [
@@ -679,7 +1133,7 @@ export default function NewClaim() {
       {
         id: procTurnId,
         sender: 'assistant',
-        text: 'Listening and understanding your details...',
+        text: 'Listening and thinking about what you shared...',
         timestamp: 'Just now',
         isStreaming: true,
       },
@@ -688,6 +1142,10 @@ export default function NewClaim() {
     const knownMap = getKnownFieldsMap()
     const historyList = getHistoryPayload()
     const expectedField = missingFields.length > 0 ? missingFields[activeMissingIndex] : null
+    const mergedMotorContext = {
+      ...motorSlots,
+      ...(vehicleMakeModel.trim() ? { vehicle_make_model: vehicleMakeModel.trim() } : {}),
+    }
 
     try {
       const data: VoiceTranscribeResponse = await api.transcribeVoice(
@@ -698,7 +1156,20 @@ export default function NewClaim() {
         knownMap,
         historyList,
         expectedField,
+        mergedMotorContext,
       )
+      if ((data.no_speech_detected || !(data.transcript || '').trim()) && browserFallbackTranscript) {
+        const conv = await api.converseClaimTurn({
+          message: browserFallbackTranscript,
+          language: effectiveSttLanguage,
+          known_fields: knownMap,
+          known_motor_slots: mergedMotorContext,
+          history: historyList,
+          expected_field: expectedField,
+        })
+        applyConversationResult(conv, procTurnId)
+        return
+      }
       applyConversationResult(data, procTurnId)
     } catch (err: any) {
       if (browserFallbackTranscript) {
@@ -707,6 +1178,7 @@ export default function NewClaim() {
             message: browserFallbackTranscript,
             language: effectiveSttLanguage,
             known_fields: knownMap,
+            known_motor_slots: mergedMotorContext,
             history: historyList,
             expected_field: expectedField,
           })
@@ -720,6 +1192,8 @@ export default function NewClaim() {
       }
       setMessages((prev) => prev.filter((m) => m.id !== procTurnId))
       setError(err.message || 'Speech transcription failed. Please type your details below or retry speaking.')
+    } finally {
+      isProcessingTurnRef.current = false
     }
   }
 
@@ -727,47 +1201,75 @@ export default function NewClaim() {
   const handleProcessTextIntake = async (customText?: string) => {
     const raw = (customText ?? textIntakeInput).trim()
     if (!raw) return
+    cancelAllSpeechOutput()
     setError('')
-    setHasStartedIntake(true)
+    setVoiceNotice('')
     setTextIntakeInput('')
+    isProcessingTurnRef.current = true
 
     try {
       const data = await api.converseClaimTurn({
         message: raw,
         language: effectiveSttLanguage,
         known_fields: getKnownFieldsMap(),
+        known_motor_slots: {
+          ...motorSlots,
+          ...(vehicleMakeModel.trim() ? { vehicle_make_model: vehicleMakeModel.trim() } : {}),
+        },
         history: getHistoryPayload(),
         expected_field: missingFields.length > 0 ? missingFields[activeMissingIndex] : null,
       })
       applyConversationResult(data)
     } catch (err: any) {
       setError(err.message || 'Failed to process your message.')
+    } finally {
+      isProcessingTurnRef.current = false
     }
   }
 
   // ── Follow-Up Voice Recording ──
   const startAnswerRecording = async () => {
-    stopAudio()
+    if (recorderRef.current || answerRecorderRef.current) return
+    cancelAllSpeechOutput()
     setError('')
+    setVoiceNotice('')
+    setVadState('calibrating')
     try {
-      const recorder = new WavRecorder(16000, (vol) => setAudioVolume(vol))
+      const recorder = new WavRecorder(16000, (vol) => setAudioVolume(vol), {
+        autoStopOnSilence: handsFreeModeRef.current,
+        silenceDurationMs: 1500,
+        minSpeechMs: 280,
+        maxInitialSilenceMs: 12000,
+        onVadStateChange: setVadState,
+        onAutoSilenceStop: () => {
+          void stopAnswerRecordingRef.current()
+        },
+        onInitialSilenceTimeout: () => {
+          cancelAnswerRecordingRef.current()
+          setHandsFreeMode(false)
+          setVoiceNotice('Hands-free paused after 12s of silence — toggle Hands-Free or tap the mic when ready.')
+        },
+      })
       answerRecorderRef.current = recorder
       await recorder.start()
       startBrowserSpeechCapture(effectiveSttLanguage)
 
+      isAnswerRecordingRef.current = true
       setIsAnswerRecording(true)
       setAnswerRecordingSeconds(0)
 
       answerTimerRef.current = window.setInterval(() => {
         setAnswerRecordingSeconds((s) => {
-          if (s >= 14) {
-            stopAnswerRecording()
-            return 15
+          if (s >= 29) {
+            void stopAnswerRecordingRef.current()
+            return 30
           }
           return s + 1
         })
       }, 1000)
     } catch (err: any) {
+      answerRecorderRef.current = null
+      isAnswerRecordingRef.current = false
       setError(err.message || 'Microphone access denied for answer.')
       setIsAnswerRecording(false)
     }
@@ -781,48 +1283,66 @@ export default function NewClaim() {
     const browserCaptured = stopBrowserSpeechCapture()
     if (!answerRecorderRef.current) return
 
+    const activeRecorder = answerRecorderRef.current
+    answerRecorderRef.current = null
+    isAnswerRecordingRef.current = false
     setIsAnswerRecording(false)
+    setAudioVolume(0)
+
+    const stats = activeRecorder.getStats()
+    const audioBlob = await activeRecorder.stop()
+    if (!stats.hasSpeech && !browserCaptured) {
+      setVoiceNotice('No speech detected in your answer — tap the mic again or type below.')
+      return
+    }
+
     setIsProcessingAnswerVoice(true)
+    isProcessingTurnRef.current = true
 
     const knownMap = getKnownFieldsMap()
     const historyList = getHistoryPayload()
     const expectedField = missingFields[activeMissingIndex] || null
+    const mergedMotorContext = {
+      ...motorSlots,
+      ...(vehicleMakeModel.trim() ? { vehicle_make_model: vehicleMakeModel.trim() } : {}),
+    }
 
     try {
       const resp = await api.transcribeVoice(
-        await answerRecorderRef.current.stop(),
+        audioBlob,
         'answer.wav',
         false,
         effectiveSttLanguage,
         knownMap,
         historyList,
         expectedField,
+        mergedMotorContext,
       )
-      answerRecorderRef.current = null
       setIsProcessingAnswerVoice(false)
 
-      if ((resp.transcript || '').trim()) {
+      if (!resp.no_speech_detected && (resp.transcript || '').trim()) {
         applyConversationResult(resp)
       } else if (browserCaptured) {
         const conv = await api.converseClaimTurn({
           message: browserCaptured,
           language: effectiveSttLanguage,
           known_fields: knownMap,
+          known_motor_slots: mergedMotorContext,
           history: historyList,
           expected_field: expectedField,
         })
         applyConversationResult(conv)
       } else {
-        setError('No speech detected in your answer. Please tap mic again or type below.')
+        setVoiceNotice('No speech detected in your answer — please tap the mic again or type below.')
       }
     } catch (err: any) {
-      answerRecorderRef.current = null
       if (browserCaptured) {
         try {
           const conv = await api.converseClaimTurn({
             message: browserCaptured,
             language: effectiveSttLanguage,
             known_fields: knownMap,
+            known_motor_slots: mergedMotorContext,
             history: historyList,
             expected_field: expectedField,
           })
@@ -833,6 +1353,8 @@ export default function NewClaim() {
       }
       setIsProcessingAnswerVoice(false)
       setError(err.message || 'Failed to process voice answer. Please type below or retry.')
+    } finally {
+      isProcessingTurnRef.current = false
     }
   }
 
@@ -846,25 +1368,52 @@ export default function NewClaim() {
       answerRecorderRef.current.cancel()
       answerRecorderRef.current = null
     }
+    isAnswerRecordingRef.current = false
     setIsAnswerRecording(false)
     setAnswerRecordingSeconds(0)
+    setAudioVolume(0)
   }
+
+  startRecordingRef.current = startRecording
+  stopRecordingRef.current = stopRecording
+  cancelRecordingRef.current = cancelRecording
+  startAnswerRecordingRef.current = startAnswerRecording
+  stopAnswerRecordingRef.current = stopAnswerRecording
+  cancelAnswerRecordingRef.current = cancelAnswerRecording
+
+  const vadStatusLabel =
+    vadState === 'calibrating'
+      ? 'Calibrating mic...'
+      : vadState === 'speaking'
+      ? 'Hearing you — pause to send'
+      : vadState === 'pausing'
+      ? 'Pause detected — sending...'
+      : 'Speak anytime...'
 
   const handleApplyAnswer = async (value: string) => {
     const clean = (value || '').trim()
     if (!clean) return
+    cancelAllSpeechOutput()
     setError('')
+    setVoiceNotice('')
+    isProcessingTurnRef.current = true
     try {
       const conv = await api.converseClaimTurn({
         message: clean,
         language: effectiveSttLanguage,
         known_fields: getKnownFieldsMap(),
+        known_motor_slots: {
+          ...motorSlots,
+          ...(vehicleMakeModel.trim() ? { vehicle_make_model: vehicleMakeModel.trim() } : {}),
+        },
         history: getHistoryPayload(),
         expected_field: missingFields[activeMissingIndex] || null,
       })
       applyConversationResult(conv)
     } catch (err: any) {
       setError(err.message || 'Failed to process answer.')
+    } finally {
+      isProcessingTurnRef.current = false
     }
   }
 
@@ -876,6 +1425,10 @@ export default function NewClaim() {
       setMissingFields(next.filter((f) => f.confidence === 'missing' || !f.value).map((f) => f.name))
       return next
     })
+    if (name === 'vehicle_type') {
+      const cat = deriveVehicleCategoryFromField(value)
+      if (cat) setClaimedVehicleType(cat)
+    }
   }
 
   // ── Transition from Step 1 (Conversation) -> Step 2 (Evidence Collection & Screening) ──
@@ -892,6 +1445,10 @@ export default function NewClaim() {
       setError('Please complete all 5 core claim fields (by voice, text, or clicking the pencil icon) before proceeding to Evidence Screening.')
       return
     }
+    const lockedCat = deriveVehicleCategoryFromField(fieldMap.vehicle_type)
+    if (lockedCat) {
+      setClaimedVehicleType(lockedCat)
+    }
 
     if (!activeClaimId) {
       setIsSubmitting(true)
@@ -901,13 +1458,21 @@ export default function NewClaim() {
           customer_id: storedUser?.customer_id,
           insurer_name: storedUser?.declared_insurer || 'Bharat General Insurance',
           policy_reference: fieldMap.policy_reference,
+          claimed_registration: vehicleRegistration || undefined,
           incident_location: fieldMap.incident_location,
           incident_date: fieldMap.incident_date,
           vehicle_type: fieldMap.vehicle_type,
+          vehicle_make_model: vehicleMakeModel || undefined,
+          claimed_vehicle_type: lockedCat || claimedVehicleType,
           damage_description: fieldMap.damage_description,
           injuries_reported: injuriesReported,
-          people_involved: `Policyholder (${storedUser?.name || 'Driver'})`,
+          people_involved: motorForm.driver_name ? `${motorForm.driver_name} (${motorForm.driver_relationship || 'Driver'})` : `Policyholder (${storedUser?.name || 'Driver'})`,
           transcript: transcript || 'Customer conversational intake completed.',
+          motor_claim_form: {
+            ...motorForm,
+            pillion_rider_present: (lockedCat || claimedVehicleType) === 'two_wheeler' ? motorForm.pillion_rider_present : undefined,
+            occupants_count: (lockedCat || claimedVehicleType) === 'four_wheeler' ? motorForm.occupants_count : undefined,
+          },
         })
         setActiveClaimId(created.id)
       } catch (err: any) {
@@ -918,6 +1483,8 @@ export default function NewClaim() {
       setIsSubmitting(false)
     }
 
+    cancelAllSpeechOutput()
+    setHandsFreeMode(false)
     setWizardStep(2)
   }
 
@@ -925,15 +1492,34 @@ export default function NewClaim() {
   const runAiVerificationOnFile = async (
     file: File,
     overrideVehicleType?: 'four_wheeler' | 'two_wheeler',
-  ) => {
+    overrideMakeModel?: string,
+    liveOptions?: { captureSessionId?: string; captureMethod?: string; lockSessionOnVerify?: boolean },
+  ): Promise<EvidenceVerificationReport | null> => {
+    const reqId = ++verificationReqIdRef.current
     const vType = overrideVehicleType || claimedVehicleType
+    const activeMakeModel = overrideMakeModel !== undefined ? overrideMakeModel : vehicleMakeModel
+    const activeReg =
+      vehicleRegistration ||
+      fields.find((f) => f.name === 'policy_reference')?.value ||
+      ''
+    cancelAllSpeechOutput()
+    setEvidenceNarration(null)
     setSelectedEvidenceFile(file)
     if (evidencePreviewUrl) URL.revokeObjectURL(evidencePreviewUrl)
     setEvidencePreviewUrl(URL.createObjectURL(file))
     setIsVerifyingEvidence(true)
     setError('')
     try {
-      const res = await api.verifyEvidenceV1(file, vType)
+      const res = await api.verifyEvidenceV1(
+        file,
+        vType,
+        activeMakeModel,
+        activeReg,
+        liveOptions?.captureSessionId,
+        liveOptions?.captureMethod || 'upload_photo',
+        Boolean(liveOptions?.lockSessionOnVerify),
+      )
+      if (reqId !== verificationReqIdRef.current) return null
       setAiVerificationResult(res)
       if (res.decision === 'REJECT') {
         const isMism =
@@ -941,8 +1527,12 @@ export default function NewClaim() {
           Boolean(res.reasons?.some((r) => r.includes('VEHICLE_CATEGORY_MISMATCH')))
         if (isMism) {
           setError(
-            `Vehicle Category Mismatch: You selected ${formatCategoryLabel(vType)}, but the AI detected a ${formatCategoryLabel(res.detected_vehicle_category)} in the uploaded photo. Please upload a valid photo of the claimed vehicle.`,
+            `Vehicle Category Mismatch: You claimed ${formatCategoryLabel(vType)} in Step 1, but the AI detected a ${formatCategoryLabel(res.detected_vehicle_category)} in the uploaded photo. This photo was NOT added to your claim.`,
           )
+        } else if (res.reasons?.some((r) => r.includes('NON_VEHICLE_PERSON_SELFIE'))) {
+          setError('No Vehicle Detected (Person/Selfie): This image was rejected and was NOT added to your claim.')
+        } else if (res.reasons?.some((r) => r.includes('NO_VEHICLE_DETECTED_REJECTED') || r.includes('NON_VEHICLE_OBJECT_DETECTED'))) {
+          setError('No Bike or Car Detected: Non-vehicle images are rejected and are NOT added to your claim.')
         } else {
           setError(`Evidence Rejected: ${res.reasons.join(', ')}`)
         }
@@ -961,23 +1551,35 @@ export default function NewClaim() {
           total_estimated_inr: res.cost_estimate?.total_estimated_inr || 0,
           damages: res.cost_estimate?.line_items || [],
           language: lockedLanguage || selectedLanguage || 'hi-IN',
+          reasons: res.reasons || [],
         })
+        if (reqId !== verificationReqIdRef.current) return res
         if (narration?.spoken_narration) {
           setEvidenceNarration({
             spoken: narration.spoken_narration,
             lang: narration.language,
           })
           if (autoVoiceEnabled) {
-            setTimeout(() => speakText(narration.spoken_narration, narration.language), 400)
+            if (narrationTimerRef.current) clearTimeout(narrationTimerRef.current)
+            narrationTimerRef.current = window.setTimeout(() => {
+              if (reqId === verificationReqIdRef.current) {
+                void speakText(narration.spoken_narration, narration.language)
+              }
+            }, 250)
           }
         }
       } catch (narrationErr) {
         console.warn('Evidence narration failed:', narrationErr)
       }
+      return res
     } catch (err: any) {
+      if (reqId !== verificationReqIdRef.current) return null
       setError(err.message || '5-Stage AI evidence verification failed.')
+      return null
     } finally {
-      setIsVerifyingEvidence(false)
+      if (reqId === verificationReqIdRef.current) {
+        setIsVerifyingEvidence(false)
+      }
     }
   }
 
@@ -988,11 +1590,39 @@ export default function NewClaim() {
     }
   }
 
+  const handleGenerateWhatsappHandoff = async () => {
+    setError('')
+    try {
+      const storedUser = getStoredUser()
+      const activeReg =
+        vehicleRegistration ||
+        fields.find((f) => f.name === 'policy_reference')?.value ||
+        ''
+      const handoff = await api.createWhatsappLiveCameraHandoff(
+        activeClaimId,
+        storedUser?.phone,
+        activeReg,
+      )
+      setWhatsappHandoff(handoff)
+      setIsHandoffCameraLocked(true)
+      setCaptureSession({
+        session_id: handoff.session_id,
+        claim_id: handoff.claim_id,
+        instructions: handoff.instructions,
+        created_at: new Date().toISOString(),
+        expires_in_seconds: handoff.expires_in_seconds,
+      })
+    } catch (err: any) {
+      setError(err.message || 'Failed to generate WhatsApp Stage 5 Live Camera handoff link.')
+    }
+  }
+
   const handleUploadEvidenceFile = async (
     file: Blob | File,
     filename: string,
     captureMethod: string = 'upload_photo',
     sessionId?: string,
+    aiDecision?: 'PASS' | 'REVIEW' | 'REJECT',
   ) => {
     if (!activeClaimId) return
     setUploadingEvidence(true)
@@ -1006,6 +1636,9 @@ export default function NewClaim() {
         sessionId,
       )
       setEvidenceList((prev) => [...prev, asset])
+      if (aiDecision) {
+        setEvidenceAiDecisions((prev) => ({ ...prev, [asset.evidence_id]: aiDecision }))
+      }
     } catch (err: any) {
       setError(err.message || 'Evidence upload & integrity check failed.')
     } finally {
@@ -1019,10 +1652,16 @@ export default function NewClaim() {
     for (let i = 0; i < files.length; i++) {
       const f = files[i]
       const isVideo = f.type.startsWith('video/') || /\.(mp4|mov|webm|avi)$/i.test(f.name)
+      let aiDecision: 'PASS' | 'REVIEW' | 'REJECT' | undefined
       if (!isVideo) {
-        await runAiVerificationOnFile(f)
+        const aiRes = await runAiVerificationOnFile(f)
+        if (!aiRes || aiRes.decision === 'REJECT') {
+          // Never push rejected non-vehicle, person/selfie, or mismatched photos into Claim Evidence Inventory
+          continue
+        }
+        aiDecision = aiRes.decision
       }
-      await handleUploadEvidenceFile(f, f.name, isVideo ? 'upload_video' : 'upload_photo')
+      await handleUploadEvidenceFile(f, f.name, isVideo ? 'upload_video' : 'upload_photo', undefined, aiDecision)
     }
     if (evidenceInputRef.current) evidenceInputRef.current.value = ''
   }
@@ -1087,12 +1726,20 @@ export default function NewClaim() {
         if (blob) {
           const fname = `live_capture_${session!.session_id}.jpg`
           const fileObj = new File([blob], fname, { type: 'image/jpeg' })
-          await runAiVerificationOnFile(fileObj)
+          const aiRes = await runAiVerificationOnFile(fileObj, claimedVehicleType, vehicleMakeModel, {
+            captureSessionId: session!.session_id,
+            captureMethod: 'live_photo',
+            lockSessionOnVerify: isHandoffCameraLocked,
+          })
+          if (!aiRes || aiRes.decision === 'REJECT') {
+            return
+          }
           await handleUploadEvidenceFile(
             blob,
             fname,
             'live_photo',
             session!.session_id,
+            aiRes.decision,
           )
         }
       },
@@ -1150,8 +1797,31 @@ export default function NewClaim() {
   // ── Step 3: Final Customer Confirmation & 9-Section Dossier Generation ──
   const handleFinalizeAndGenerateDossier = async () => {
     if (!activeClaimId) return
-    if (!declarationChecked) {
-      setError('Please check the Customer Declaration box to confirm your claim details.')
+    if (!motorForm.dpdp_consent_granted) {
+      setError('Please grant the compulsory DPDP Act 2025 consent before submitting your claim dossier.')
+      return
+    }
+    if (!declarationChecked || !motorForm.truthfulness_declaration_accepted) {
+      setError('Please confirm the truthfulness declaration to certify your claim details.')
+      return
+    }
+    if (motorForm.claim_settlement_mode === 'reimbursement') {
+      if (!motorForm.bank_account_holder_name?.trim() || !motorForm.bank_account_number?.trim() || !motorForm.bank_ifsc_code?.trim()) {
+        setOpenAccordion('conditional')
+        setError('Reimbursement selected: Please complete Account Holder Name, Bank Account Number, and IFSC Code.')
+        return
+      }
+    }
+    if (motorForm.police_fir_lodged_flag) {
+      if (!motorForm.fir_or_gd_number?.trim() || !motorForm.police_station_name?.trim()) {
+        setOpenAccordion('conditional')
+        setError('Police FIR is marked lodged: Please enter FIR / GD Number and Police Station Name.')
+        return
+      }
+    }
+    if (motorForm.loss_type === 'theft' && motorForm.financier_hypothecated && !motorForm.financier_name?.trim()) {
+      setOpenAccordion('conditional')
+      setError('Please specify the Financier Name for the hypothecated stolen vehicle.')
       return
     }
     if (aiVerificationResult?.decision === 'REJECT') {
@@ -1162,12 +1832,25 @@ export default function NewClaim() {
     setError('')
 
     const fieldMap = Object.fromEntries(fields.map((f) => [f.name, f.value || '']))
+    const consentTs = motorForm.dpdp_consent_timestamp || new Date().toISOString()
+    const payloadMotorForm: MotorClaimFormDetails = {
+      ...motorForm,
+      incident_time: incidentTime || motorForm.incident_time,
+      pillion_rider_present: claimedVehicleType === 'two_wheeler' ? Boolean(motorForm.pillion_rider_present) : null,
+      occupants_count: claimedVehicleType === 'four_wheeler' ? (motorForm.occupants_count ?? 1) : null,
+      dpdp_consent_granted: true,
+      dpdp_consent_timestamp: consentTs,
+      truthfulness_declaration_accepted: true,
+      insured_digital_signature: motorForm.insured_digital_signature?.trim() || motorForm.claimant_name?.trim() || '',
+    }
     try {
       await api.updateAndConfirmClaim(activeClaimId, {
         policy_reference: fieldMap.policy_reference,
+        claimed_registration: vehicleRegistration || undefined,
         incident_location: fieldMap.incident_location,
         incident_date: fieldMap.incident_date,
         vehicle_type: fieldMap.vehicle_type,
+        vehicle_make_model: vehicleMakeModel || undefined,
         damage_description: fieldMap.damage_description,
         injuries_reported: injuriesReported,
         customer_confirmation: true,
@@ -1176,6 +1859,7 @@ export default function NewClaim() {
         claimed_vehicle_type: claimedVehicleType,
         total_estimated_inr: aiVerificationResult?.cost_estimate?.total_estimated_inr,
         cost_estimate: aiVerificationResult?.cost_estimate,
+        motor_claim_form: payloadMotorForm,
       })
       await api.generateReport(activeClaimId)
       navigate(`/claims/${activeClaimId}`)
@@ -1305,11 +1989,7 @@ export default function NewClaim() {
                   type="button"
                   onClick={() => {
                     if (autoVoiceEnabled) {
-                      stopAudio()
-                      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-                        window.speechSynthesis.cancel()
-                      }
-                      setIsPlayingAudio(false)
+                      cancelAllSpeechOutput()
                       setAutoVoiceEnabled(false)
                     } else {
                       setAutoVoiceEnabled(true)
@@ -1324,6 +2004,21 @@ export default function NewClaim() {
                 >
                   {autoVoiceEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
                   <span>{autoVoiceEnabled ? 'Voice: ON' : 'Voice: MUTED'}</span>
+                </button>
+
+                {/* Hands-Free Auto-Pause Conversational Mode */}
+                <button
+                  type="button"
+                  onClick={toggleHandsFreeMode}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
+                    handsFreeMode
+                      ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'
+                      : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-100'
+                  }`}
+                  title="Automatically sends when you pause speaking and re-opens the mic after the assistant replies"
+                >
+                  <Radio className={`w-3.5 h-3.5 ${handsFreeMode ? 'animate-pulse text-blue-600' : ''}`} />
+                  <span>{handsFreeMode ? 'Hands-Free: ON' : 'Hands-Free: OFF'}</span>
                 </button>
 
                 {/* Replay Last Voice Response */}
@@ -1425,7 +2120,7 @@ export default function NewClaim() {
                           {isAssistant && turn.audioText && (
                             <button
                               type="button"
-                              onClick={() => speakText(turn.audioText!, turn.language)}
+                              onClick={() => void speakText(turn.audioText!, turn.language, 1.0, 1.0, { toggleIfSame: true })}
                               disabled={isSynthesizing}
                               className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 hover:text-blue-950"
                             >
@@ -1500,6 +2195,19 @@ export default function NewClaim() {
 
               {/* BOTTOM VOICE & TEXT CONTROLS */}
               <div className="mt-4 pt-4 border-t border-gray-200 space-y-3">
+                {voiceNotice && (
+                  <div className="flex items-center justify-between gap-2 bg-gray-50 border border-gray-200 text-gray-700 rounded-xl px-3.5 py-2 text-xs">
+                    <span>{voiceNotice}</span>
+                    <button
+                      type="button"
+                      onClick={() => setVoiceNotice('')}
+                      className="text-[11px] font-semibold text-gray-500 hover:text-gray-800"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
+
                 {!hasStartedIntake ? (
                   <>
                     {!isRecording ? (
@@ -1525,11 +2233,18 @@ export default function NewClaim() {
                       </div>
                     ) : (
                       <div className="flex flex-col items-center justify-center">
-                        <div className="flex items-center gap-3 mb-2">
+                        <div className="flex items-center gap-3 mb-1.5">
                           <span className="w-3 h-3 rounded-full bg-red-600 animate-ping" />
                           <span className="text-xs font-bold text-gray-700">
                             Recording (00:{recordingSeconds < 10 ? `0${recordingSeconds}` : recordingSeconds} / 00:30)
+                            {handsFreeMode && <span className="ml-2 text-blue-700 font-semibold">&bull; {vadStatusLabel}</span>}
                           </span>
+                        </div>
+                        <div className="w-48 h-1.5 bg-red-100 rounded-full overflow-hidden mb-2.5">
+                          <div
+                            className="h-full bg-red-500 transition-all duration-75"
+                            style={{ width: `${Math.max(8, Math.round(audioVolume * 100))}%` }}
+                          />
                         </div>
                         <div className="flex items-center gap-3">
                           <button
@@ -1596,26 +2311,35 @@ export default function NewClaim() {
                         </div>
                       </div>
                     ) : isAnswerRecording ? (
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-red-600 flex items-center gap-1.5">
-                          <Radio className="w-4 h-4 animate-ping" /> Listening (00:
-                          {answerRecordingSeconds < 10 ? `0${answerRecordingSeconds}` : answerRecordingSeconds})
-                        </span>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={stopAnswerRecording}
-                            className="px-4 py-1.5 rounded-xl bg-red-600 text-white text-xs font-bold"
-                          >
-                            <Square className="w-3.5 h-3.5 fill-white inline mr-1" /> {t('done_speaking_btn')}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={cancelAnswerRecording}
-                            className="px-3 py-1.5 rounded-xl border border-gray-300 text-xs text-gray-600"
-                          >
-                            {t('cancel_btn')}
-                          </button>
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-red-600 flex items-center gap-1.5">
+                            <Radio className="w-4 h-4 animate-ping" /> Listening (00:
+                            {answerRecordingSeconds < 10 ? `0${answerRecordingSeconds}` : answerRecordingSeconds})
+                            {handsFreeMode && <span className="ml-1.5 text-blue-700 font-semibold">&bull; {vadStatusLabel}</span>}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={stopAnswerRecording}
+                              className="px-4 py-1.5 rounded-xl bg-red-600 text-white text-xs font-bold"
+                            >
+                              <Square className="w-3.5 h-3.5 fill-white inline mr-1" /> {t('done_speaking_btn')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={cancelAnswerRecording}
+                              className="px-3 py-1.5 rounded-xl border border-gray-300 text-xs text-gray-600"
+                            >
+                              {t('cancel_btn')}
+                            </button>
+                          </div>
+                        </div>
+                        <div className="w-full h-1.5 bg-red-100 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-red-500 transition-all duration-75"
+                            style={{ width: `${Math.max(8, Math.round(audioVolume * 100))}%` }}
+                          />
                         </div>
                       </div>
                     ) : (
@@ -1635,15 +2359,15 @@ export default function NewClaim() {
                       <button
                         type="button"
                         onClick={() => {
-                          stopAudio()
-                          if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-                            window.speechSynthesis.cancel()
-                          }
+                          cancelAllSpeechOutput()
                           setHasStartedIntake(false)
+                          setHandsFreeMode(false)
+                          setVoiceNotice('')
                           setTranscript('')
                           setMissingFields([])
                           setLockedLanguage(null)
                           setExtractedSlotsSummary(null)
+                          setVehicleMakeModel('')
                           setVehicleRegistration('')
                           setIncidentTime('')
                           setDrivableStatus('')
@@ -1681,6 +2405,11 @@ export default function NewClaim() {
                         {formatCategoryLabel(extractedSlotsSummary.vehicleType)}
                       </span>
                     )}
+                    {extractedSlotsSummary.makeModel && (
+                      <span className="px-2.5 py-0.5 rounded-full bg-teal-100 text-teal-900 font-semibold">
+                        Model: {extractedSlotsSummary.makeModel}
+                      </span>
+                    )}
                     {extractedSlotsSummary.registration && (
                       <span className="px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-900 font-mono font-bold">
                         {extractedSlotsSummary.registration}
@@ -1689,6 +2418,26 @@ export default function NewClaim() {
                     {extractedSlotsSummary.damages && extractedSlotsSummary.damages.length > 0 && (
                       <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 font-semibold">
                         Damages: {extractedSlotsSummary.damages.join(', ')}
+                      </span>
+                    )}
+                    {extractedSlotsSummary.motorSlots?.loss_type && (
+                      <span className="px-2.5 py-0.5 rounded-full bg-purple-100 text-purple-900 font-semibold">
+                        Loss: {extractedSlotsSummary.motorSlots.loss_type.replace(/_/g, ' ')}
+                      </span>
+                    )}
+                    {extractedSlotsSummary.motorSlots?.incident_time && (
+                      <span className="px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-800 font-semibold">
+                        Time: {extractedSlotsSummary.motorSlots.incident_time}
+                      </span>
+                    )}
+                    {extractedSlotsSummary.motorSlots?.driver_was_owner === false && (
+                      <span className="px-2.5 py-0.5 rounded-full bg-indigo-100 text-indigo-900 font-semibold">
+                        Driver: {extractedSlotsSummary.motorSlots.driver_name || extractedSlotsSummary.motorSlots.driver_relationship || 'Other Driver'}
+                      </span>
+                    )}
+                    {extractedSlotsSummary.motorSlots?.police_fir_lodged_flag !== undefined && extractedSlotsSummary.motorSlots?.police_fir_lodged_flag !== null && (
+                      <span className="px-2.5 py-0.5 rounded-full bg-gray-100 text-gray-800 font-semibold">
+                        FIR: {extractedSlotsSummary.motorSlots.police_fir_lodged_flag ? 'Yes' : 'No'}
                       </span>
                     )}
                   </div>
@@ -1736,6 +2485,37 @@ export default function NewClaim() {
                     />
                   )
                 })}
+
+                {/* Vehicle Make / Model Input (Captured in Step 1 for backend pricing only) */}
+                <div
+                  className={`rounded-2xl border p-3.5 transition-all ${
+                    vehicleMakeModel.trim()
+                      ? 'bg-emerald-50/50 border-emerald-200'
+                      : 'bg-white border-gray-200'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <span className="text-[11px] font-bold uppercase tracking-wide text-gray-500">
+                      Vehicle Model / Name
+                    </span>
+                    <span
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                        vehicleMakeModel.trim()
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-gray-100 text-gray-500'
+                      }`}
+                    >
+                      {vehicleMakeModel.trim() ? 'Captured' : 'Optional'}
+                    </span>
+                  </div>
+                  <input
+                    type="text"
+                    value={vehicleMakeModel}
+                    onChange={(e) => setVehicleMakeModel(e.target.value)}
+                    placeholder="e.g. Bajaj Pulsar 220, Maruti Swift, Honda Activa"
+                    className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                  />
+                </div>
               </div>
 
               {isAllCaptured && (
@@ -1772,7 +2552,10 @@ export default function NewClaim() {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setWizardStep(1)}
+                  onClick={() => {
+                    cancelAllSpeechOutput()
+                    setWizardStep(1)
+                  }}
                   className="px-3.5 py-2 rounded-xl border border-gray-200 text-xs font-semibold text-gray-600 hover:bg-gray-50"
                 >
                   &larr; Back to Conversation
@@ -1789,6 +2572,7 @@ export default function NewClaim() {
                       setError('Advancement blocked: Evidence was rejected by the 5-stage AI engine. Please upload a valid photo of the claimed vehicle.')
                       return
                     }
+                    cancelAllSpeechOutput()
                     setWizardStep(3)
                   }}
                   className="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl bg-brand-600 text-white text-xs font-bold hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-xs"
@@ -1798,70 +2582,165 @@ export default function NewClaim() {
               </div>
             </div>
 
-            {/* Claimed Vehicle Category Selection */}
-            <div className="bg-gray-50/90 border border-gray-200 rounded-2xl p-4 mb-6 space-y-2">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
-                <label className="block text-xs font-bold text-gray-800">
-                  Claimed Policy Vehicle Category (5-Stage Vision Screening Guard)
-                </label>
-                <span className="text-[11px] font-semibold text-gray-500">
-                  Cross-vehicle mismatch (Car vs. Bike) is strictly rejected
+            {/* Claimed Vehicle Category & Registration Identity Binding */}
+            {(() => {
+              const step1VehicleValue = fields.find((f) => f.name === 'vehicle_type')?.value
+              const step1LockedCat = deriveVehicleCategoryFromField(step1VehicleValue)
+              const isVehicleLockedFromStep1 = Boolean(step1LockedCat)
+              return (
+                <div className="bg-gray-50/90 border border-gray-200 rounded-2xl p-4 mb-6 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                    <label className="block text-xs font-bold text-gray-800">
+                      Claimed Vehicle &amp; Registration Details
+                    </label>
+                    <span className="text-[11px] font-semibold text-gray-500">
+                      {isVehicleLockedFromStep1
+                        ? `Constrained to ${formatCategoryLabel(step1LockedCat!)} from Step 1 • Cross-vehicle & non-vehicle photos rejected`
+                        : 'Cross-vehicle mismatch (Car vs. Bike) is strictly rejected'}
+                    </span>
+                  </div>
+                  <div className="grid sm:grid-cols-3 gap-3">
+                    {isVehicleLockedFromStep1 ? (
+                      <div className="sm:col-span-2 flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl border border-brand-600 bg-brand-50 text-brand-900 shadow-xs">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          {claimedVehicleType === 'two_wheeler' ? (
+                            <Bike className="w-4 h-4 text-brand-700 shrink-0" />
+                          ) : (
+                            <Car className="w-4 h-4 text-brand-700 shrink-0" />
+                          )}
+                          <div className="min-w-0">
+                            <div className="text-xs font-extrabold truncate">
+                              Locked from Step 1: {formatCategoryLabel(claimedVehicleType)}
+                              {vehicleMakeModel.trim() ? ` • ${vehicleMakeModel.trim()}` : ''}
+                            </div>
+                            <div className="text-[10px] font-medium text-brand-700">
+                              Only {claimedVehicleType === 'two_wheeler' ? 'Two-Wheeler (Bike)' : 'Four-Wheeler (Car)'} photos accepted
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            cancelAllSpeechOutput()
+                            setWizardStep(1)
+                          }}
+                          className="text-[11px] font-bold text-brand-700 underline hover:text-brand-900 shrink-0"
+                        >
+                          Change in Step 1
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          disabled={isVerifyingEvidence}
+                          onClick={() => handleToggleVehicleCategory('four_wheeler')}
+                          className={`flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl border text-xs font-bold transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
+                            claimedVehicleType === 'four_wheeler'
+                              ? 'bg-brand-50 border-brand-600 text-brand-800 shadow-xs'
+                              : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-100'
+                          }`}
+                        >
+                          <Car className="w-4 h-4" />
+                          Four-Wheeler (Car)
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isVerifyingEvidence}
+                          onClick={() => handleToggleVehicleCategory('two_wheeler')}
+                          className={`flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl border text-xs font-bold transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
+                            claimedVehicleType === 'two_wheeler'
+                              ? 'bg-brand-50 border-brand-600 text-brand-800 shadow-xs'
+                              : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-100'
+                          }`}
+                        >
+                          <Bike className="w-4 h-4" />
+                          Two-Wheeler (Bike)
+                        </button>
+                      </>
+                    )}
+
+                    <div>
+                      <input
+                        type="text"
+                        value={vehicleRegistration}
+                        onChange={(e) => setVehicleRegistration(e.target.value.toUpperCase())}
+                        placeholder="Reg Plate (e.g. KA-01-MJ-4412)"
+                        className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-xs font-mono font-semibold text-gray-800"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )
+            })()}
+
+            {/* Unbundled DPDP Rules 2025 Pre-Capture Consent Bar */}
+            <div className="bg-blue-50/70 border border-blue-200 rounded-2xl px-4 py-3 mb-5 flex flex-wrap items-center justify-between gap-3">
+              <label className="flex items-start gap-2.5 cursor-pointer text-xs text-blue-950">
+                <input
+                  type="checkbox"
+                  checked={dpdpPreCaptureConsent}
+                  onChange={(e) => setDpdpPreCaptureConsent(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 rounded text-blue-600 focus:ring-blue-500"
+                />
+                <span>
+                  <strong>DPDP 2025 Pre-Capture Consent:</strong> I consent to live camera capture &amp; plate/damage verification for this motor claim only (auto-erasure available on withdrawal).
                 </span>
-              </div>
-              <div className="grid grid-cols-2 gap-3 max-w-md">
+              </label>
+              {isHandoffCameraLocked && (
                 <button
                   type="button"
-                  onClick={() => handleToggleVehicleCategory('four_wheeler')}
-                  className={`flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl border text-xs font-bold transition-all ${
-                    claimedVehicleType === 'four_wheeler'
-                      ? 'bg-brand-50 border-brand-600 text-brand-800 shadow-xs'
-                      : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-100'
-                  }`}
+                  onClick={() => setIsHandoffCameraLocked(false)}
+                  className="text-[11px] font-semibold text-blue-700 underline hover:text-blue-900"
                 >
-                  <Car className="w-4 h-4" />
-                  Four-Wheeler (Car)
+                  Unlock Desktop Upload
                 </button>
-                <button
-                  type="button"
-                  onClick={() => handleToggleVehicleCategory('two_wheeler')}
-                  className={`flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl border text-xs font-bold transition-all ${
-                    claimedVehicleType === 'two_wheeler'
-                      ? 'bg-brand-50 border-brand-600 text-brand-800 shadow-xs'
-                      : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-100'
-                  }`}
-                >
-                  <Bike className="w-4 h-4" />
-                  Two-Wheeler (Bike)
-                </button>
-              </div>
+              )}
             </div>
 
             {/* Upload & Live Camera Action Cards */}
             <div className="grid md:grid-cols-2 gap-5 mb-6">
-              {/* Option A: Upload Photo or Video from Device */}
-              <div className="rounded-2xl border-2 border-dashed border-blue-200 bg-blue-50/40 p-5 flex flex-col justify-between">
+              {/* Option A: Upload Photo or Video from Device (Locked when WhatsApp Handoff Active) */}
+              <div
+                className={`rounded-2xl border-2 border-dashed p-5 flex flex-col justify-between ${
+                  isHandoffCameraLocked
+                    ? 'border-gray-300 bg-gray-100/80 opacity-75'
+                    : 'border-blue-200 bg-blue-50/40'
+                }`}
+              >
                 <div>
                   <div className="flex items-center gap-2 text-blue-900 font-bold text-sm mb-1">
                     <Upload className="w-4 h-4 text-blue-600" />
-                    Upload Vehicle Damage Photos or Videos
+                    {isHandoffCameraLocked
+                      ? 'Gallery Upload Disabled (Live Camera Lock Active)'
+                      : 'Upload Vehicle Damage Photos or Videos'}
                   </div>
                   <p className="text-xs text-gray-600 mb-4">
-                    Supports JPEG, PNG, WebP images and MP4, MOV, WebM videos. Validates magic bytes, EXIF metadata, C2PA/SynthID provenance, SHA-256 &amp; 64-bit DCT pHash.
+                    {isHandoffCameraLocked
+                      ? 'To prevent WhatsApp metadata stripping and gallery replay, tokenized Stage 5 handoff links accept Live Camera frames only.'
+                      : 'Supports JPEG, PNG, WebP images and MP4, MOV, WebM videos. Validates magic bytes, EXIF metadata, advisory provenance, SHA-256 & 64-bit DCT pHash.'}
                   </p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-3">
-                  <label className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 text-white text-xs font-bold cursor-pointer hover:bg-blue-700 shadow-xs">
-                    <Upload className="w-4 h-4" /> Choose Photo / Video Files
-                    <input
-                      ref={evidenceInputRef}
-                      type="file"
-                      multiple
-                      accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm"
-                      className="hidden"
-                      onChange={handleEvidenceInputChange}
-                    />
-                  </label>
+                  {isHandoffCameraLocked ? (
+                    <span className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-100 border border-amber-300 text-amber-900 text-xs font-bold">
+                      🔒 Gallery File Picker Locked — Use Live Camera &rarr;
+                    </span>
+                  ) : (
+                    <label className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 text-white text-xs font-bold cursor-pointer hover:bg-blue-700 shadow-xs">
+                      <Upload className="w-4 h-4" /> Choose Photo / Video Files
+                      <input
+                        ref={evidenceInputRef}
+                        type="file"
+                        multiple
+                        disabled={!dpdpPreCaptureConsent}
+                        accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm"
+                        className="hidden"
+                        onChange={handleEvidenceInputChange}
+                      />
+                    </label>
+                  )}
                   {uploadingEvidence && (
                     <span className="inline-flex items-center gap-1.5 text-xs text-blue-700 font-semibold">
                       <Spinner size="sm" /> Screening evidence...
@@ -1952,7 +2831,29 @@ export default function NewClaim() {
                   >
                     <Video className="w-3.5 h-3.5" /> Simulate Live Session Capture
                   </button>
+                  <button
+                    type="button"
+                    onClick={handleGenerateWhatsappHandoff}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-white border border-blue-200 text-blue-700 text-xs font-semibold hover:bg-blue-50"
+                    title="WhatsApp strips EXIF & C2PA; send a 1-tap browser link directly to Stage 5 Live Camera"
+                  >
+                    <Send className="w-3.5 h-3.5" /> WhatsApp &rarr; Live Camera Link
+                  </button>
                 </div>
+
+                {whatsappHandoff && (
+                  <div className="mt-3 p-3 rounded-xl bg-white border border-blue-200 text-[11px] space-y-1">
+                    <div className="font-bold text-blue-900">
+                      WhatsApp 1-Tap Browser Handoff Ready ({whatsappHandoff.session_id}) &bull; Raw WhatsApp Media Blocked
+                    </div>
+                    <div className="font-mono text-[10px] text-blue-700 break-all">
+                      {whatsappHandoff.handoff_url}
+                    </div>
+                    <div className="text-gray-600">
+                      DPDP Masked IDs: Phone {whatsappHandoff.masked_phone} &bull; Reg {whatsappHandoff.masked_registration}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1987,6 +2888,15 @@ export default function NewClaim() {
                           <strong>{formatCategoryLabel(aiVerificationResult.detected_vehicle_category)}</strong> in the uploaded photo.
                           Please upload a photo of the claimed {formatCategoryLabel(claimedVehicleType)}.
                         </p>
+                      ) : aiVerificationResult.reasons?.some((r) => r.includes('NON_VEHICLE_PERSON_SELFIE')) ? (
+                        <p className="text-xs text-red-800 leading-relaxed">
+                          <strong>No Vehicle Detected (Person / Selfie Captured):</strong> The camera captured a person rather than a motor vehicle. If you are testing on a laptop front webcam, please upload a vehicle photo or use the <strong>WhatsApp &rarr; Live Camera Link</strong> on your phone to point at your damaged vehicle.
+                        </p>
+                      ) : aiVerificationResult.reasons?.some((r) => r.includes('NO_VEHICLE_DETECTED_REJECTED') || r.includes('NON_VEHICLE_OBJECT_DETECTED')) ? (
+                        <p className="text-xs text-red-800 leading-relaxed">
+                          <strong>No Vehicle Detected — Photo Rejected:</strong> No bike, car, or vehicle damage was detected in this photo. Only clear photos of your claimed{' '}
+                          <strong>{formatCategoryLabel(claimedVehicleType)}</strong> are accepted — this image was NOT added to your claim.
+                        </p>
                       ) : (
                         <p className="text-xs text-red-800 leading-relaxed">
                           {aiVerificationResult.reasons.join(', ')}
@@ -2008,7 +2918,7 @@ export default function NewClaim() {
                           Evidence Passed 5-Stage Screening — Approved for Auto-Estimate
                         </div>
                         <div className="text-[11px] text-emerald-700">
-                          {formatCategoryLabel(claimedVehicleType)} verified &bull; Spoof Risk: {(aiVerificationResult.spoof_risk * 100).toFixed(1)}% &bull; Detected Damages: {aiVerificationResult.damage_count}
+                          {formatCategoryLabel(aiVerificationResult.claimed_vehicle_type || claimedVehicleType)} verified &bull; Spoof Risk: {(aiVerificationResult.spoof_risk * 100).toFixed(1)}% &bull; Detected Damages: {aiVerificationResult.damage_count}
                         </div>
                       </div>
                     </div>
@@ -2024,7 +2934,9 @@ export default function NewClaim() {
                       <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
                       <div>
                         <div className="text-xs font-bold text-amber-950">
-                          Flagged for Human Adjuster Review — Provisional Estimate Generated
+                          {!aiVerificationResult.vehicle_detected && aiVerificationResult.damage_count === 0
+                            ? 'No Vehicle Detected — Please Capture a Clear Vehicle Photo'
+                            : 'Flagged for Human Adjuster Review — Provisional Estimate Generated'}
                         </div>
                         <div className="text-[11px] text-amber-800">
                           {aiVerificationResult.reasons.join(' • ')}
@@ -2053,7 +2965,7 @@ export default function NewClaim() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => speakText(evidenceNarration.spoken, evidenceNarration.lang)}
+                      onClick={() => void speakText(evidenceNarration.spoken, evidenceNarration.lang, 1.0, 1.0, { toggleIfSame: true })}
                       className="shrink-0 px-3.5 py-1.5 rounded-xl bg-blue-600 text-white font-semibold text-xs hover:bg-blue-700 shadow-xs flex items-center gap-1.5 transition-all"
                     >
                       <Volume2 className="w-3.5 h-3.5" />
@@ -2165,6 +3077,8 @@ export default function NewClaim() {
                               <td colSpan={4} className="py-4 text-center text-gray-400 text-xs">
                                 {aiVerificationResult.decision === 'REJECT'
                                   ? 'Upload rejected — ₹0 estimate issued.'
+                                  : !aiVerificationResult.vehicle_detected
+                                  ? 'No motor vehicle detected in this photo.'
                                   : 'No damages detected on this vehicle.'}
                               </td>
                             </tr>
@@ -2201,10 +3115,41 @@ export default function NewClaim() {
                     </div>
 
                     <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50 border border-gray-200">
-                      <span className="text-xs font-bold text-gray-700">Total AI Estimated Amount:</span>
+                      <div>
+                        <span className="text-xs font-bold text-gray-700 block">
+                          Preliminary Repair Estimate:
+                        </span>
+                        <span className="text-[11px] text-gray-500">
+                          {aiVerificationResult.cost_estimate?.estimate_band_min_inr ? (
+                            <>Estimated Range: {formatInr(aiVerificationResult.cost_estimate.estimate_band_min_inr)} &ndash; {formatInr(aiVerificationResult.cost_estimate.estimate_band_max_inr || aiVerificationResult.cost_estimate.total_estimated_inr)}</>
+                          ) : (
+                            'Surveyor verification pending'
+                          )}
+                        </span>
+                      </div>
                       <span className="text-lg font-extrabold text-brand-700">
                         {formatInr(aiVerificationResult.cost_estimate?.total_estimated_inr || 0)}
                       </span>
+                    </div>
+
+                    {aiVerificationResult.vehicle_identity && (
+                      <div className="p-2.5 rounded-xl bg-blue-50/70 border border-blue-200 text-[11px] text-blue-900 space-y-0.5">
+                        <div className="font-bold">
+                          Vehicle Identity Binding: {aiVerificationResult.vehicle_identity.plate_match_status}
+                          {aiVerificationResult.vehicle_identity.claimed_registration ? ` (${aiVerificationResult.vehicle_identity.claimed_registration})` : ''}
+                        </div>
+                        <div>{aiVerificationResult.vehicle_identity.identity_note}</div>
+                      </div>
+                    )}
+
+                    <div className="text-[10px] text-gray-500 leading-snug space-y-0.5">
+                      <div>
+                        {aiVerificationResult.cost_estimate?.bfsi_regulatory_disclaimer ||
+                          'Preliminary AI Repair Cost Band for Surveyor/Adjuster Review Only. Final settlement rests with the licensed insurer/TPA.'}
+                      </div>
+                      {aiVerificationResult.stage_results?.stage2_metadata?.provenance_disclaimer && (
+                        <div>{aiVerificationResult.stage_results.stage2_metadata.provenance_disclaimer}</div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -2278,7 +3223,8 @@ export default function NewClaim() {
                 <div className="grid sm:grid-cols-2 gap-4">
                   {evidenceList.map((ev) => {
                     const scr = ev.screening
-                    const isFlagged = scr?.requires_human_review
+                    const aiDec = evidenceAiDecisions[ev.evidence_id]
+                    const isFlagged = Boolean(scr?.requires_human_review) || aiDec === 'REVIEW'
                     return (
                       <div
                         key={ev.evidence_id}
@@ -2404,69 +3350,718 @@ export default function NewClaim() {
               ))}
             </div>
 
-            {/* Supplemental Motor Claim Details */}
+            {/* Supplemental & Formal Indian Motor Claim Form (Groups B & C — Zero Group D Fields) */}
             <div className="space-y-3">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500">
-                Supplemental Motor &amp; Safety Details (Step 3 &amp; 4 of PDF)
-              </h3>
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1">
-                  Vehicle Registration Number
-                </label>
-                <input
-                  type="text"
-                  value={vehicleRegistration}
-                  onChange={(e) => setVehicleRegistration(e.target.value)}
-                  placeholder="Enter your vehicle registration number"
-                  className="w-full rounded-xl border border-gray-300 px-3 py-2 text-xs"
-                />
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500">
+                  Formal Motor Claim Details (IRDAI 2W / 4W Standard)
+                </h3>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                  {claimedVehicleType === 'two_wheeler' ? '2-Wheeler Schema' : '4-Wheeler Schema'}
+                </span>
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1">
-                  Approximate Incident Time
-                </label>
-                <input
-                  type="text"
-                  value={incidentTime}
-                  onChange={(e) => setIncidentTime(e.target.value)}
-                  placeholder="Enter approximate date & time of incident"
-                  className="w-full rounded-xl border border-gray-300 px-3 py-2 text-xs"
-                />
+
+              {/* 1. Claimant & Policy Identification */}
+              <div className="rounded-2xl border border-gray-200 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setOpenAccordion(openAccordion === 'claimant' ? '' : 'claimant')}
+                  className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-50 text-left text-xs font-bold text-gray-800"
+                >
+                  <span>1. Claimant &amp; Policy Identification</span>
+                  <ChevronDown className={`w-4 h-4 transition-transform ${openAccordion === 'claimant' ? 'rotate-180' : ''}`} />
+                </button>
+                {openAccordion === 'claimant' && (
+                  <div className="p-3.5 space-y-2.5 bg-white text-xs">
+                    <div className="grid sm:grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="block font-semibold text-gray-600 mb-1">Full Name (on Policy / RC)</label>
+                        <input
+                          type="text"
+                          value={motorForm.claimant_name || ''}
+                          onChange={(e) => updateMotorForm({ claimant_name: e.target.value })}
+                          className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block font-semibold text-gray-600 mb-1">Registered Mobile (RMN)</label>
+                        <input
+                          type="text"
+                          value={motorForm.registered_mobile || ''}
+                          onChange={(e) => updateMotorForm({ registered_mobile: e.target.value })}
+                          className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid sm:grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="block font-semibold text-gray-600 mb-1">Claimant Email</label>
+                        <input
+                          type="email"
+                          value={motorForm.claimant_email || ''}
+                          onChange={(e) => updateMotorForm({ claimant_email: e.target.value })}
+                          className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block font-semibold text-gray-600 mb-1">Vehicle Registration Number</label>
+                        <input
+                          type="text"
+                          value={vehicleRegistration}
+                          onChange={(e) => setVehicleRegistration(e.target.value)}
+                          placeholder="e.g. KA-01-MJ-4412"
+                          className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs font-mono"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid sm:grid-cols-3 gap-2.5">
+                      <div className="sm:col-span-2">
+                        <label className="block font-semibold text-gray-600 mb-1">Residential Address</label>
+                        <input
+                          type="text"
+                          value={motorForm.residential_address || ''}
+                          onChange={(e) => updateMotorForm({ residential_address: e.target.value })}
+                          placeholder="House/Flat No, Street, City"
+                          className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block font-semibold text-gray-600 mb-1">Pincode</label>
+                        <input
+                          type="text"
+                          maxLength={6}
+                          value={motorForm.pincode || ''}
+                          onChange={(e) => updateMotorForm({ pincode: e.target.value })}
+                          placeholder="560001"
+                          className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs font-mono"
+                        />
+                      </div>
+                    </div>
+                    <label className="flex items-center gap-2 text-xs text-gray-700 pt-1">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(motorForm.other_insurance_exists)}
+                        onChange={(e) => updateMotorForm({ other_insurance_exists: e.target.checked })}
+                        className="rounded text-brand-600"
+                      />
+                      Other active motor insurance policy exists on this vehicle
+                    </label>
+                    {motorForm.other_insurance_exists && (
+                      <input
+                        type="text"
+                        value={motorForm.other_insurance_details || ''}
+                        onChange={(e) => updateMotorForm({ other_insurance_details: e.target.value })}
+                        placeholder="Insurer name & policy number"
+                        className="w-full rounded-xl border border-amber-300 bg-amber-50/40 px-3 py-1.5 text-xs"
+                      />
+                    )}
+                  </div>
+                )}
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1">
-                  Is the Vehicle Currently Drivable?
-                </label>
-                <input
-                  type="text"
-                  value={drivableStatus}
-                  onChange={(e) => setDrivableStatus(e.target.value)}
-                  placeholder="Yes / No — note if towing is needed"
-                  className="w-full rounded-xl border border-gray-300 px-3 py-2 text-xs"
-                />
+
+              {/* 2. Incident & Vehicle Usage Details */}
+              <div className="rounded-2xl border border-gray-200 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setOpenAccordion(openAccordion === 'incident' ? '' : 'incident')}
+                  className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-50 text-left text-xs font-bold text-gray-800"
+                >
+                  <span>2. Incident, Vehicle Usage &amp; Safety Triggers</span>
+                  <ChevronDown className={`w-4 h-4 transition-transform ${openAccordion === 'incident' ? 'rotate-180' : ''}`} />
+                </button>
+                {openAccordion === 'incident' && (
+                  <div className="p-3.5 space-y-2.5 bg-white text-xs">
+                    <div className="grid sm:grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="block font-semibold text-gray-600 mb-1">Loss Type</label>
+                        <select
+                          value={motorForm.loss_type || 'own_damage_accident'}
+                          onChange={(e) => updateMotorForm({ loss_type: e.target.value as MotorLossType })}
+                          className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs bg-white"
+                        >
+                          <option value="own_damage_accident">Own Damage / Accident</option>
+                          <option value="theft">Vehicle Theft</option>
+                          <option value="fire_natural_calamity">Fire / Flood / Natural Calamity</option>
+                          <option value="third_party">Third-Party Liability</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block font-semibold text-gray-600 mb-1">Approximate Incident Time</label>
+                        <input
+                          type="text"
+                          value={incidentTime}
+                          onChange={(e) => {
+                            setIncidentTime(e.target.value)
+                            updateMotorForm({ incident_time: e.target.value })
+                          }}
+                          placeholder="e.g. 7:30 PM"
+                          className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid sm:grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="block font-semibold text-gray-600 mb-1">Vehicle Usage Type</label>
+                        <select
+                          value={motorForm.vehicle_usage_type || 'private_social_domestic'}
+                          onChange={(e) => updateMotorForm({ vehicle_usage_type: e.target.value as MotorUsageType })}
+                          className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs bg-white"
+                        >
+                          <option value="private_social_domestic">Private / Social / Domestic</option>
+                          <option value="commercial_hire_reward">Commercial / Hire &amp; Reward</option>
+                        </select>
+                      </div>
+                      {claimedVehicleType === 'two_wheeler' ? (
+                        <div className="flex items-end pb-1">
+                          <label className="flex items-center gap-2 font-semibold text-gray-700 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(motorForm.pillion_rider_present)}
+                              onChange={(e) => updateMotorForm({ pillion_rider_present: e.target.checked })}
+                              className="rounded text-brand-600"
+                            />
+                            Pillion Rider Present (2W)
+                          </label>
+                        </div>
+                      ) : (
+                        <div>
+                          <label className="block font-semibold text-gray-600 mb-1">Occupants Count (4W)</label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={12}
+                            value={motorForm.occupants_count ?? 1}
+                            onChange={(e) => updateMotorForm({ occupants_count: Math.max(1, Number(e.target.value) || 1) })}
+                            className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-gray-600 mb-1">Is the Vehicle Currently Drivable?</label>
+                      <input
+                        type="text"
+                        value={drivableStatus}
+                        onChange={(e) => setDrivableStatus(e.target.value)}
+                        placeholder="Yes / No — note if towing is needed"
+                        className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                      />
+                    </div>
+
+                    <div className="grid sm:grid-cols-3 gap-2 pt-1">
+                      <label className="flex items-center gap-1.5 text-gray-700 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(motorForm.vehicle_was_parked_unattended)}
+                          onChange={(e) => updateMotorForm({ vehicle_was_parked_unattended: e.target.checked })}
+                          className="rounded text-brand-600"
+                        />
+                        Parked Unattended
+                      </label>
+                      <label className="flex items-center gap-1.5 text-gray-700 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(motorForm.injury_or_third_party_flag)}
+                          onChange={(e) => {
+                            const checked = e.target.checked
+                            updateMotorForm({ injury_or_third_party_flag: checked })
+                            setInjuriesReported(checked ? 'Third-party or physical injury reported' : 'No injuries reported')
+                          }}
+                          className="rounded text-brand-600"
+                        />
+                        Injury / Third-Party
+                      </label>
+                      <label className="flex items-center gap-1.5 text-gray-700 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(motorForm.police_fir_lodged_flag)}
+                          onChange={(e) => {
+                            const checked = e.target.checked
+                            updateMotorForm({ police_fir_lodged_flag: checked })
+                            setPoliceFirInfo(checked ? 'FIR Lodged' : 'Not filed')
+                          }}
+                          className="rounded text-brand-600"
+                        />
+                        Police FIR Lodged
+                      </label>
+                    </div>
+                  </div>
+                )}
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1">
-                  Injuries Reported
-                </label>
-                <input
-                  type="text"
-                  value={injuriesReported}
-                  onChange={(e) => setInjuriesReported(e.target.value)}
-                  className="w-full rounded-xl border border-gray-300 px-3 py-2 text-xs"
-                />
+
+              {/* 3. Driver Details (Skipped cleanly if theft or parked unattended) */}
+              <div className="rounded-2xl border border-gray-200 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setOpenAccordion(openAccordion === 'driver' ? '' : 'driver')}
+                  className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-50 text-left text-xs font-bold text-gray-800"
+                >
+                  <span>3. Driver Details at Time of Incident</span>
+                  <ChevronDown className={`w-4 h-4 transition-transform ${openAccordion === 'driver' ? 'rotate-180' : ''}`} />
+                </button>
+                {openAccordion === 'driver' && (
+                  <div className="p-3.5 bg-white text-xs space-y-2.5">
+                    {motorForm.loss_type === 'theft' || motorForm.vehicle_was_parked_unattended ? (
+                      <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-blue-900 text-xs">
+                        Driver details are not required because the claim is marked as{' '}
+                        <strong>{motorForm.loss_type === 'theft' ? 'Theft' : 'Parked Unattended'}</strong>.
+                      </div>
+                    ) : (
+                      <>
+                        <label className="flex items-center gap-2 font-semibold text-emerald-800 bg-emerald-50/70 border border-emerald-200 rounded-xl px-3 py-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(motorForm.driver_was_owner)}
+                            onChange={(e) => updateMotorForm({ driver_was_owner: e.target.checked })}
+                            className="rounded text-emerald-600"
+                          />
+                          Driver was the Policyholder / Owner (auto-fill name &amp; address)
+                        </label>
+                        <div className="grid sm:grid-cols-3 gap-2.5">
+                          <div>
+                            <label className="block font-semibold text-gray-600 mb-1">Driver Name</label>
+                            <input
+                              type="text"
+                              value={motorForm.driver_name || ''}
+                              onChange={(e) => updateMotorForm({ driver_name: e.target.value })}
+                              className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                            />
+                          </div>
+                          <div>
+                            <label className="block font-semibold text-gray-600 mb-1">Driver Age</label>
+                            <input
+                              type="number"
+                              min={18}
+                              max={95}
+                              value={motorForm.driver_age ?? ''}
+                              onChange={(e) => updateMotorForm({ driver_age: e.target.value ? Number(e.target.value) : undefined })}
+                              className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                            />
+                          </div>
+                          <div>
+                            <label className="block font-semibold text-gray-600 mb-1">Relationship</label>
+                            <select
+                              value={motorForm.driver_relationship || 'owner'}
+                              onChange={(e) => updateMotorForm({ driver_relationship: e.target.value as MotorDriverRelationship })}
+                              className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs bg-white"
+                            >
+                              <option value="owner">Owner / Self</option>
+                              <option value="relative_or_friend">Relative or Friend</option>
+                              <option value="paid_driver">Paid Driver</option>
+                            </select>
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-gray-600 mb-1">Driver Address</label>
+                          <input
+                            type="text"
+                            value={motorForm.driver_address || ''}
+                            onChange={(e) => updateMotorForm({ driver_address: e.target.value })}
+                            className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                          />
+                        </div>
+                        <div className="grid sm:grid-cols-2 gap-2.5">
+                          <div>
+                            <label className="block font-semibold text-gray-600 mb-1">Driving License Number (Manual)</label>
+                            <input
+                              type="text"
+                              value={motorForm.driver_license_number || ''}
+                              onChange={(e) => updateMotorForm({ driver_license_number: e.target.value.toUpperCase() })}
+                              placeholder="KA01 20200012345"
+                              className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs font-mono"
+                            />
+                          </div>
+                          <div>
+                            <label className="block font-semibold text-gray-600 mb-1">DL Expiry Date</label>
+                            <input
+                              type="date"
+                              value={motorForm.driver_license_expiry || ''}
+                              onChange={(e) => updateMotorForm({ driver_license_expiry: e.target.value })}
+                              className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                            />
+                          </div>
+                        </div>
+                        <div className="grid sm:grid-cols-2 gap-2.5">
+                          <div>
+                            <label className="block font-semibold text-gray-600 mb-1">DL Vehicle Class</label>
+                            <select
+                              value={motorForm.driver_license_class || ''}
+                              onChange={(e) => updateMotorForm({ driver_license_class: (e.target.value || undefined) as MotorLicenseClass })}
+                              className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs bg-white"
+                            >
+                              <option value="">Select DL Class...</option>
+                              <option value="MCWG">MCWG (2W with Gear)</option>
+                              <option value="MCWOG">MCWOG (Gearless 2W)</option>
+                              <option value="LMV">LMV (4W Light Motor Vehicle)</option>
+                              <option value="HMV">HMV (Heavy Motor Vehicle)</option>
+                              <option value="other">Other</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block font-semibold text-gray-600 mb-1">Issuing RTO</label>
+                            <input
+                              type="text"
+                              value={motorForm.driver_issuing_rto || ''}
+                              onChange={(e) => updateMotorForm({ driver_issuing_rto: e.target.value })}
+                              placeholder="e.g. Koramangala KA-01"
+                              className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                            />
+                          </div>
+                        </div>
+                        {((claimedVehicleType === 'two_wheeler' && (motorForm.driver_license_class === 'LMV' || motorForm.driver_license_class === 'HMV')) ||
+                          (claimedVehicleType === 'four_wheeler' && (motorForm.driver_license_class === 'MCWG' || motorForm.driver_license_class === 'MCWOG'))) && (
+                          <div className="bg-amber-50 border border-amber-300 rounded-xl p-2.5 text-amber-900 font-semibold text-[11px]">
+                            ⚠️ Potential License Class Mismatch: Selected DL class ({motorForm.driver_license_class}) normally does not cover a{' '}
+                            {claimedVehicleType === 'two_wheeler' ? 'Two-Wheeler (MCWG/MCWOG)' : 'Four-Wheeler (LMV)'}.
+                          </div>
+                        )}
+                        <div className="flex flex-wrap gap-4 pt-1">
+                          <label className="flex items-center gap-1.5 text-gray-700 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(motorForm.driver_under_intoxication)}
+                              onChange={(e) => updateMotorForm({ driver_under_intoxication: e.target.checked })}
+                              className="rounded text-brand-600"
+                            />
+                            Driver Under Alcohol / Drugs
+                          </label>
+                          <label className="flex items-center gap-1.5 text-gray-700 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(motorForm.driver_injured)}
+                              onChange={(e) => updateMotorForm({ driver_injured: e.target.checked })}
+                              className="rounded text-brand-600"
+                            />
+                            Driver Injured
+                          </label>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1">
-                  Police Report / FIR Information
-                </label>
-                <input
-                  type="text"
-                  value={policeFirInfo}
-                  onChange={(e) => setPoliceFirInfo(e.target.value)}
-                  className="w-full rounded-xl border border-gray-300 px-3 py-2 text-xs"
-                />
+
+              {/* 4. Inspection, Settlement Mode & Workshop Details */}
+              <div className="rounded-2xl border border-gray-200 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setOpenAccordion(openAccordion === 'workshop' ? '' : 'workshop')}
+                  className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-50 text-left text-xs font-bold text-gray-800"
+                >
+                  <span>4. Settlement Mode, Inspection &amp; Workshop Details</span>
+                  <ChevronDown className={`w-4 h-4 transition-transform ${openAccordion === 'workshop' ? 'rotate-180' : ''}`} />
+                </button>
+                {openAccordion === 'workshop' && (
+                  <div className="p-3.5 bg-white text-xs space-y-2.5">
+                    <div className="grid sm:grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="block font-semibold text-gray-600 mb-1">Claim Settlement Mode</label>
+                        <select
+                          value={motorForm.claim_settlement_mode || 'cashless'}
+                          onChange={(e) => updateMotorForm({ claim_settlement_mode: e.target.value as ClaimSettlementMode })}
+                          className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs bg-white"
+                        >
+                          <option value="cashless">Cashless (Network Garage)</option>
+                          <option value="reimbursement">Reimbursement (Bank NEFT)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block font-semibold text-gray-600 mb-1">Preferred Inspection Date/Time</label>
+                        <input
+                          type="datetime-local"
+                          value={motorForm.preferred_inspection_datetime || ''}
+                          onChange={(e) => updateMotorForm({ preferred_inspection_datetime: e.target.value })}
+                          className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-gray-600 mb-1">Inspection Location / Address</label>
+                      <input
+                        type="text"
+                        value={motorForm.inspection_location || ''}
+                        onChange={(e) => updateMotorForm({ inspection_location: e.target.value })}
+                        placeholder="Garage address or spot where vehicle is parked"
+                        className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                      />
+                    </div>
+                    <div className="grid sm:grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="block font-semibold text-gray-600 mb-1">Workshop / Garage Name</label>
+                        <input
+                          type="text"
+                          value={motorForm.workshop_name || ''}
+                          onChange={(e) => updateMotorForm({ workshop_name: e.target.value })}
+                          className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block font-semibold text-gray-600 mb-1">Workshop Contact</label>
+                        <input
+                          type="text"
+                          value={motorForm.workshop_contact || ''}
+                          onChange={(e) => updateMotorForm({ workshop_contact: e.target.value })}
+                          className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid sm:grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="block font-semibold text-gray-600 mb-1">Workshop Address</label>
+                        <input
+                          type="text"
+                          value={motorForm.workshop_address || ''}
+                          onChange={(e) => updateMotorForm({ workshop_address: e.target.value })}
+                          className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block font-semibold text-gray-600 mb-1">Garage Estimate INR (Optional)</label>
+                        <input
+                          type="number"
+                          min={0}
+                          value={motorForm.approx_estimated_repair_cost_inr ?? ''}
+                          onChange={(e) => updateMotorForm({ approx_estimated_repair_cost_inr: e.target.value ? Number(e.target.value) : undefined })}
+                          placeholder="e.g. 12500"
+                          className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
+
+              {/* 5. Conditional Disclosures (Group C — rendered ONLY when triggered!) */}
+              {(motorForm.claim_settlement_mode === 'reimbursement' ||
+                motorForm.police_fir_lodged_flag ||
+                motorForm.loss_type === 'theft' ||
+                motorForm.injury_or_third_party_flag ||
+                motorForm.driver_injured ||
+                motorForm.loss_type === 'fire_natural_calamity') && (
+                <div className="rounded-2xl border border-amber-300 overflow-hidden bg-amber-50/30">
+                  <button
+                    type="button"
+                    onClick={() => setOpenAccordion(openAccordion === 'conditional' ? '' : 'conditional')}
+                    className="w-full flex items-center justify-between px-4 py-2.5 bg-amber-50 text-left text-xs font-bold text-amber-900"
+                  >
+                    <span>5. Additional Required Details (Triggered Conditions)</span>
+                    <ChevronDown className={`w-4 h-4 transition-transform ${openAccordion === 'conditional' ? 'rotate-180' : ''}`} />
+                  </button>
+                  <div className="p-3.5 space-y-3 text-xs bg-white">
+                    {/* Trigger 1: Reimbursement Bank / NEFT Details */}
+                    {motorForm.claim_settlement_mode === 'reimbursement' && (
+                      <div className="space-y-2 border-b border-gray-100 pb-3">
+                        <div className="font-bold text-gray-800">Bank / NEFT Details (Reimbursement Settlement)</div>
+                        <div className="grid sm:grid-cols-2 gap-2">
+                          <input
+                            type="text"
+                            value={motorForm.bank_account_holder_name || ''}
+                            onChange={(e) => updateMotorForm({ bank_account_holder_name: e.target.value })}
+                            placeholder="Account Holder Name *"
+                            className="rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                          />
+                          <input
+                            type="text"
+                            value={motorForm.bank_account_number || ''}
+                            onChange={(e) => updateMotorForm({ bank_account_number: e.target.value })}
+                            placeholder="Bank Account Number *"
+                            className="rounded-xl border border-gray-300 px-3 py-1.5 text-xs font-mono"
+                          />
+                          <input
+                            type="text"
+                            value={motorForm.bank_ifsc_code || ''}
+                            onChange={(e) => updateMotorForm({ bank_ifsc_code: e.target.value.toUpperCase() })}
+                            placeholder="IFSC Code *"
+                            className="rounded-xl border border-gray-300 px-3 py-1.5 text-xs font-mono"
+                          />
+                          <input
+                            type="text"
+                            value={motorForm.bank_branch_name || ''}
+                            onChange={(e) => updateMotorForm({ bank_branch_name: e.target.value })}
+                            placeholder="Bank & Branch Name"
+                            className="rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Trigger 2: FIR Details */}
+                    {motorForm.police_fir_lodged_flag && (
+                      <div className="space-y-2 border-b border-gray-100 pb-3">
+                        <div className="font-bold text-gray-800">Police FIR / GD Entry Details</div>
+                        <div className="grid sm:grid-cols-2 gap-2">
+                          <input
+                            type="text"
+                            value={motorForm.fir_or_gd_number || ''}
+                            onChange={(e) => updateMotorForm({ fir_or_gd_number: e.target.value })}
+                            placeholder="FIR / GD Number *"
+                            className="rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                          />
+                          <input
+                            type="text"
+                            value={motorForm.police_station_name || ''}
+                            onChange={(e) => updateMotorForm({ police_station_name: e.target.value })}
+                            placeholder="Police Station Name *"
+                            className="rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                          />
+                          <input
+                            type="date"
+                            value={motorForm.fir_report_date || ''}
+                            onChange={(e) => updateMotorForm({ fir_report_date: e.target.value })}
+                            className="rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                          />
+                          <input
+                            type="text"
+                            value={motorForm.fir_complainant_name || ''}
+                            onChange={(e) => updateMotorForm({ fir_complainant_name: e.target.value })}
+                            placeholder="Complainant Name"
+                            className="rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Trigger 3: Theft-Specific Details */}
+                    {motorForm.loss_type === 'theft' && (
+                      <div className="space-y-2 border-b border-gray-100 pb-3">
+                        <div className="font-bold text-gray-800">Theft-Specific Requirements</div>
+                        <div className="grid sm:grid-cols-2 gap-2">
+                          <select
+                            value={motorForm.non_traceable_report_status || 'pending'}
+                            onChange={(e) => updateMotorForm({ non_traceable_report_status: e.target.value as any })}
+                            className="rounded-xl border border-gray-300 px-3 py-1.5 text-xs bg-white"
+                          >
+                            <option value="pending">Non-Traceable Report: Pending</option>
+                            <option value="obtained">Non-Traceable Report: Obtained</option>
+                            <option value="not_applicable">Non-Traceable Report: N/A</option>
+                          </select>
+                          <label className="flex items-center gap-2 text-gray-700">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(motorForm.all_original_keys_available)}
+                              onChange={(e) => updateMotorForm({ all_original_keys_available: e.target.checked })}
+                              className="rounded text-brand-600"
+                            />
+                            All Original Keys Available
+                          </label>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-3">
+                          <label className="flex items-center gap-2 text-gray-700">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(motorForm.financier_hypothecated)}
+                              onChange={(e) => updateMotorForm({ financier_hypothecated: e.target.checked })}
+                              className="rounded text-brand-600"
+                            />
+                            Vehicle Hypothecated / Financed
+                          </label>
+                          {motorForm.financier_hypothecated && (
+                            <input
+                              type="text"
+                              value={motorForm.financier_name || ''}
+                              onChange={(e) => updateMotorForm({ financier_name: e.target.value })}
+                              placeholder="Financier / Bank Name *"
+                              className="flex-1 rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                            />
+                          )}
+                        </div>
+                        <input
+                          type="text"
+                          value={motorForm.stolen_accessories_details || ''}
+                          onChange={(e) => updateMotorForm({ stolen_accessories_details: e.target.value })}
+                          placeholder="Stolen accessories details (optional)"
+                          className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                        />
+                      </div>
+                    )}
+
+                    {/* Trigger 4: Injury / Third-Party Details */}
+                    {(motorForm.injury_or_third_party_flag || motorForm.driver_injured) && (
+                      <div className="space-y-2 border-b border-gray-100 pb-3">
+                        <div className="font-bold text-gray-800">Injury / Third-Party &amp; Witness Details</div>
+                        <div className="grid sm:grid-cols-2 gap-2">
+                          <select
+                            value={motorForm.third_party_loss_type || 'injury'}
+                            onChange={(e) => updateMotorForm({ third_party_loss_type: e.target.value as any })}
+                            className="rounded-xl border border-gray-300 px-3 py-1.5 text-xs bg-white"
+                          >
+                            <option value="injury">Third-Party Injury</option>
+                            <option value="death">Third-Party Fatality</option>
+                            <option value="property_damage">Third-Party Property Damage</option>
+                            <option value="driver_or_occupant_only">Driver / Occupant Only</option>
+                          </select>
+                          <input
+                            type="number"
+                            min={0}
+                            value={motorForm.third_party_injured_count ?? 0}
+                            onChange={(e) => updateMotorForm({ third_party_injured_count: Number(e.target.value) || 0 })}
+                            placeholder="Injured Persons Count"
+                            className="rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                          />
+                          <input
+                            type="text"
+                            value={motorForm.hospital_and_treatment_details || ''}
+                            onChange={(e) => updateMotorForm({ hospital_and_treatment_details: e.target.value })}
+                            placeholder="Hospital & Treatment Details"
+                            className="rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                          />
+                          <input
+                            type="text"
+                            value={motorForm.third_party_vehicle_reg || ''}
+                            onChange={(e) => updateMotorForm({ third_party_vehicle_reg: e.target.value })}
+                            placeholder="Third-Party Vehicle Reg No"
+                            className="rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                          />
+                          <input
+                            type="text"
+                            value={motorForm.third_party_policy_details || ''}
+                            onChange={(e) => updateMotorForm({ third_party_policy_details: e.target.value })}
+                            placeholder="Third-Party Policy Details"
+                            className="rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                          />
+                          <input
+                            type="text"
+                            value={motorForm.third_party_damage_summary || ''}
+                            onChange={(e) => updateMotorForm({ third_party_damage_summary: e.target.value })}
+                            placeholder="Third-Party Damage Summary"
+                            className="rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                          />
+                          <input
+                            type="text"
+                            value={motorForm.witness_name || ''}
+                            onChange={(e) => updateMotorForm({ witness_name: e.target.value })}
+                            placeholder="Witness Name"
+                            className="rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                          />
+                          <input
+                            type="text"
+                            value={motorForm.witness_contact || ''}
+                            onChange={(e) => updateMotorForm({ witness_contact: e.target.value })}
+                            placeholder="Witness Contact"
+                            className="rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Trigger 5: Fire / Natural Calamity */}
+                    {motorForm.loss_type === 'fire_natural_calamity' && (
+                      <div className="space-y-1.5">
+                        <div className="font-bold text-gray-800">Fire / Natural Calamity Report</div>
+                        <input
+                          type="text"
+                          value={motorForm.fire_brigade_report_number || ''}
+                          onChange={(e) => updateMotorForm({ fire_brigade_report_number: e.target.value })}
+                          placeholder="Fire Brigade / Calamity Report Number (Optional)"
+                          className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -2515,36 +4110,92 @@ export default function NewClaim() {
             </div>
           )}
 
-          {/* Customer Declaration Checkbox (Section 8 of Dossier) */}
-          <div className="bg-emerald-50/70 border border-emerald-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <label className="flex items-start gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={declarationChecked}
-                onChange={(e) => setDeclarationChecked(e.target.checked)}
-                className="mt-1 w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500"
-              />
-              <span className="text-xs text-emerald-950 leading-relaxed">
-                <strong>Customer Confirmation &amp; Declaration (Section 8):</strong> I confirm that the extracted and edited incident details, policy information, and {evidenceList.length} uploaded evidence file(s) are accurate to the best of my knowledge.
-              </span>
-            </label>
+          {/* Legal Declarations & Compulsory DPDP Act 2025 Consent (Step 3 before Submit) */}
+          <div className="bg-emerald-50/70 border border-emerald-200 rounded-2xl p-4 space-y-4">
+            <div className="grid sm:grid-cols-3 gap-3 text-xs">
+              <div>
+                <label className="block font-semibold text-emerald-950 mb-1">Declaration Place</label>
+                <input
+                  type="text"
+                  value={motorForm.declaration_place || ''}
+                  onChange={(e) => updateMotorForm({ declaration_place: e.target.value })}
+                  placeholder="City / Town"
+                  className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-1.5 text-xs"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-emerald-950 mb-1">Declaration Date</label>
+                <input
+                  type="date"
+                  value={motorForm.declaration_date || ''}
+                  onChange={(e) => updateMotorForm({ declaration_date: e.target.value })}
+                  className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-1.5 text-xs"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-emerald-950 mb-1">Insured Digital Signature (Typed Full Name)</label>
+                <input
+                  type="text"
+                  value={motorForm.insured_digital_signature || ''}
+                  onChange={(e) => updateMotorForm({ insured_digital_signature: e.target.value })}
+                  placeholder="Type your full name"
+                  className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-1.5 text-xs font-medium"
+                />
+              </div>
+            </div>
 
-            <button
-              type="button"
-              onClick={handleFinalizeAndGenerateDossier}
-              disabled={isSubmitting}
-              className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-2xl bg-emerald-600 text-white font-bold text-xs shadow-sm hover:bg-emerald-700 disabled:opacity-50 shrink-0"
-            >
-              {isSubmitting ? (
-                <>
-                  <Spinner size="sm" /> Generating 9-Section Dossier...
-                </>
-              ) : (
-                <>
-                  <Check className="w-4 h-4" /> Confirm &amp; Generate 9-Section Claim Dossier
-                </>
-              )}
-            </button>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-1 border-t border-emerald-200/80">
+              <div className="space-y-2">
+                <label className="flex items-start gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(motorForm.dpdp_consent_granted)}
+                    onChange={(e) =>
+                      updateMotorForm({
+                        dpdp_consent_granted: e.target.checked,
+                        dpdp_consent_timestamp: e.target.checked ? new Date().toISOString() : '',
+                      })
+                    }
+                    className="mt-1 w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <span className="text-xs text-emerald-950 leading-relaxed">
+                    <strong>DPDP Act 2025 Consent (Required):</strong> I explicitly consent to the processing of my claim data, vehicle details, and forensic evidence for insurer claim verification.
+                  </span>
+                </label>
+
+                <label className="flex items-start gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={declarationChecked && Boolean(motorForm.truthfulness_declaration_accepted)}
+                    onChange={(e) => {
+                      setDeclarationChecked(e.target.checked)
+                      updateMotorForm({ truthfulness_declaration_accepted: e.target.checked })
+                    }}
+                    className="mt-1 w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <span className="text-xs text-emerald-950 leading-relaxed">
+                    <strong>Customer Confirmation &amp; Declaration (Section 9):</strong> I confirm that all declared incident details, driver particulars, and {evidenceList.length} uploaded evidence file(s) are true and accurate.
+                  </span>
+                </label>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleFinalizeAndGenerateDossier}
+                disabled={isSubmitting || !motorForm.dpdp_consent_granted}
+                className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-2xl bg-emerald-600 text-white font-bold text-xs shadow-sm hover:bg-emerald-700 disabled:opacity-50 shrink-0"
+              >
+                {isSubmitting ? (
+                  <>
+                    <Spinner size="sm" /> Generating 9-Section Dossier...
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4" /> Confirm &amp; Generate 9-Section Claim Dossier
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -8,6 +8,7 @@ import type {
   EvidenceAssetRecord,
   ReportRecord,
   InsurerSubmissionResponse,
+  MotorAdjusterPlaceholders,
 } from '../types'
 import Spinner from '../components/Spinner'
 import StatusBadge from '../components/StatusBadge'
@@ -29,6 +30,8 @@ import {
   Upload,
   Video,
   Send,
+  ShieldCheck,
+  Save,
 } from 'lucide-react'
 
 const SECTION_TITLES: { key: string; num: string; title: string }[] = [
@@ -52,10 +55,21 @@ export default function ClaimDetail() {
   const [reports, setReports] = useState<ReportRecord[]>([])
   const [submissions, setSubmissions] = useState<InsurerSubmissionResponse[]>([])
 
-  const [activeTab, setActiveTab] = useState<'dossier' | 'evidence' | 'gateway' | 'timeline'>('dossier')
+  const [activeTab, setActiveTab] = useState<'dossier' | 'evidence' | 'gateway' | 'adjuster' | 'timeline'>('dossier')
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState(false)
   const [error, setError] = useState('')
+  const [adjusterSavedMsg, setAdjusterSavedMsg] = useState('')
+  const [adjusterForm, setAdjusterForm] = useState<MotorAdjusterPlaceholders>({
+    insurer_policy_master: { active_addons: [] },
+    external_registry_checks: {
+      vahan_status: 'pending_integration',
+      sarathi_dl_status: 'pending_integration',
+      iib_cross_claim_status: 'pending_integration',
+      edar_sync_status: 'pending_integration',
+    },
+    surveyor_assessment: { damage_freshness_classification: 'pending' },
+  })
   const [selectedRecipient, setSelectedRecipient] = useState('DEMO_INSURER_A')
   const [showCanonicalJson, setShowCanonicalJson] = useState(false)
 
@@ -69,6 +83,9 @@ export default function ClaimDetail() {
     try {
       const data = await api.getClaim(id)
       setClaim(data.claim)
+      if (data.claim.insurer_adjuster_data) {
+        setAdjusterForm(data.claim.insurer_adjuster_data)
+      }
       setTimeline(data.timeline || [])
       setEvidence(data.evidence || [])
       setReports(data.reports || [])
@@ -116,6 +133,23 @@ export default function ClaimDetail() {
       setActiveTab('gateway')
     } catch (e: any) {
       setError(e.message)
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const handleSaveAdjusterAssessment = async () => {
+    if (!id) return
+    setActionLoading(true)
+    setError('')
+    setAdjusterSavedMsg('')
+    try {
+      await api.updateAdjusterAssessment(id, adjusterForm)
+      await api.generateReport(id)
+      await loadClaimFull()
+      setAdjusterSavedMsg('Group D insurer/surveyor assessment saved and 9-Section Dossier refreshed.')
+    } catch (e: any) {
+      setError(e.message || 'Failed to save adjuster assessment.')
     } finally {
       setActionLoading(false)
     }
@@ -296,6 +330,11 @@ export default function ClaimDetail() {
             id: 'gateway',
             label: `Mock Insurer Integration Gateway (${submissions.length})`,
             icon: Building2,
+          },
+          {
+            id: 'adjuster',
+            label: 'Insurer & Surveyor Portal (Adjuster)',
+            icon: ShieldCheck,
           },
           {
             id: 'timeline',
@@ -628,6 +667,387 @@ export default function ClaimDetail() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* =====================================================================
+          TAB 3B: INSURER & SURVEYOR ADJUSTER PORTAL (GROUP D ONLY)
+         ===================================================================== */}
+      {activeTab === 'adjuster' && (
+        <div className="bg-white rounded-3xl border border-gray-200 p-6 shadow-xs space-y-6">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-gray-100 pb-4">
+            <div>
+              <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-brand-600" />
+                Group D — Insurer Policy Master, External Registry &amp; Surveyor Portal
+              </h2>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Adjuster-managed and insurer-side fields (never requested on Customer Portal). Updates feed directly into Layer 1 Canonical JSON &amp; PDF Dossier.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleSaveAdjusterAssessment}
+              disabled={actionLoading}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-brand-600 text-white text-xs font-bold hover:bg-brand-700 shadow-xs disabled:opacity-50"
+            >
+              <Save className="w-4 h-4" />
+              {actionLoading ? 'Saving...' : 'Save Assessment & Refresh Dossier'}
+            </button>
+          </div>
+
+          {adjusterSavedMsg && (
+            <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl px-4 py-2.5 text-xs font-semibold">
+              {adjusterSavedMsg}
+            </div>
+          )}
+
+          {/* 1. Insurer Policy Master */}
+          <div className="rounded-2xl border border-gray-200 p-4 space-y-3 text-xs">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500">
+              1. Insurer Policy Master
+            </h3>
+            <div className="grid sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">Insurer Claim Ref No</label>
+                <input
+                  type="text"
+                  value={adjusterForm.insurer_policy_master.claim_reference_number || ''}
+                  onChange={(e) =>
+                    setAdjusterForm((p) => ({
+                      ...p,
+                      insurer_policy_master: { ...p.insurer_policy_master, claim_reference_number: e.target.value },
+                    }))
+                  }
+                  className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">Policy Start Date</label>
+                <input
+                  type="date"
+                  value={adjusterForm.insurer_policy_master.policy_start_date || ''}
+                  onChange={(e) =>
+                    setAdjusterForm((p) => ({
+                      ...p,
+                      insurer_policy_master: { ...p.insurer_policy_master, policy_start_date: e.target.value },
+                    }))
+                  }
+                  className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">Policy End Date</label>
+                <input
+                  type="date"
+                  value={adjusterForm.insurer_policy_master.policy_end_date || ''}
+                  onChange={(e) =>
+                    setAdjusterForm((p) => ({
+                      ...p,
+                      insurer_policy_master: { ...p.insurer_policy_master, policy_end_date: e.target.value },
+                    }))
+                  }
+                  className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">IDV (INR)</label>
+                <input
+                  type="number"
+                  value={adjusterForm.insurer_policy_master.idv_inr ?? ''}
+                  onChange={(e) =>
+                    setAdjusterForm((p) => ({
+                      ...p,
+                      insurer_policy_master: { ...p.insurer_policy_master, idv_inr: e.target.value ? Number(e.target.value) : null },
+                    }))
+                  }
+                  className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">NCB (%)</label>
+                <input
+                  type="number"
+                  value={adjusterForm.insurer_policy_master.ncb_percent ?? ''}
+                  onChange={(e) =>
+                    setAdjusterForm((p) => ({
+                      ...p,
+                      insurer_policy_master: { ...p.insurer_policy_master, ncb_percent: e.target.value ? Number(e.target.value) : null },
+                    }))
+                  }
+                  className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">Coverage Type</label>
+                <input
+                  type="text"
+                  value={adjusterForm.insurer_policy_master.coverage_type || ''}
+                  onChange={(e) =>
+                    setAdjusterForm((p) => ({
+                      ...p,
+                      insurer_policy_master: { ...p.insurer_policy_master, coverage_type: e.target.value },
+                    }))
+                  }
+                  placeholder="Comprehensive / Package"
+                  className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">Compulsory Excess (INR)</label>
+                <input
+                  type="number"
+                  value={adjusterForm.insurer_policy_master.compulsory_excess_inr ?? ''}
+                  onChange={(e) =>
+                    setAdjusterForm((p) => ({
+                      ...p,
+                      insurer_policy_master: { ...p.insurer_policy_master, compulsory_excess_inr: e.target.value ? Number(e.target.value) : null },
+                    }))
+                  }
+                  className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">Voluntary Excess (INR)</label>
+                <input
+                  type="number"
+                  value={adjusterForm.insurer_policy_master.voluntary_excess_inr ?? ''}
+                  onChange={(e) =>
+                    setAdjusterForm((p) => ({
+                      ...p,
+                      insurer_policy_master: { ...p.insurer_policy_master, voluntary_excess_inr: e.target.value ? Number(e.target.value) : null },
+                    }))
+                  }
+                  className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">Hypothecation Financier</label>
+                <input
+                  type="text"
+                  value={adjusterForm.insurer_policy_master.hypothecation_financier || ''}
+                  onChange={(e) =>
+                    setAdjusterForm((p) => ({
+                      ...p,
+                      insurer_policy_master: { ...p.insurer_policy_master, hypothecation_financier: e.target.value },
+                    }))
+                  }
+                  className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                />
+              </div>
+            </div>
+            <div>
+              <span className="block font-semibold text-gray-600 mb-1.5">Active Policy Add-ons</span>
+              <div className="flex flex-wrap gap-2">
+                {['Zero-Dep', 'Engine Protect', 'RTI', 'Consumables', 'PA'].map((addon) => {
+                  const active = (adjusterForm.insurer_policy_master.active_addons || []).includes(addon)
+                  return (
+                    <button
+                      key={addon}
+                      type="button"
+                      onClick={() =>
+                        setAdjusterForm((p) => ({
+                          ...p,
+                          insurer_policy_master: {
+                            ...p.insurer_policy_master,
+                            active_addons: active
+                              ? p.insurer_policy_master.active_addons.filter((a) => a !== addon)
+                              : [...(p.insurer_policy_master.active_addons || []), addon],
+                          },
+                        }))
+                      }
+                      className={`px-3 py-1 rounded-full text-xs font-bold border ${
+                        active ? 'bg-brand-600 text-white border-brand-600' : 'bg-gray-50 text-gray-700 border-gray-200'
+                      }`}
+                    >
+                      {addon}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* 2. External Registry Checks (Read-Only Pending Integration Placeholders) */}
+          <div className="rounded-2xl border border-gray-200 p-4 space-y-3 text-xs">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500">
+              2. External Registry Verification Hooks (Read-Only Integration Placeholders)
+            </h3>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">Engine Number</label>
+                <input
+                  type="text"
+                  value={adjusterForm.external_registry_checks.engine_number || ''}
+                  onChange={(e) =>
+                    setAdjusterForm((p) => ({
+                      ...p,
+                      external_registry_checks: { ...p.external_registry_checks, engine_number: e.target.value },
+                    }))
+                  }
+                  placeholder="Pending VAHAN sync / manual entry"
+                  className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs font-mono"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">Chassis / VIN Number</label>
+                <input
+                  type="text"
+                  value={adjusterForm.external_registry_checks.chassis_vin_number || ''}
+                  onChange={(e) =>
+                    setAdjusterForm((p) => ({
+                      ...p,
+                      external_registry_checks: { ...p.external_registry_checks, chassis_vin_number: e.target.value },
+                    }))
+                  }
+                  placeholder="Pending VAHAN sync / manual entry"
+                  className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs font-mono"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              {[
+                { label: 'VAHAN RC Status', val: adjusterForm.external_registry_checks.vahan_status },
+                { label: 'SARATHI DL Status', val: adjusterForm.external_registry_checks.sarathi_dl_status },
+                { label: 'IIB Cross-Claim', val: adjusterForm.external_registry_checks.iib_cross_claim_status },
+                { label: 'eDAR Sync', val: adjusterForm.external_registry_checks.edar_sync_status },
+              ].map((item) => (
+                <div key={item.label} className="bg-slate-50 border border-slate-200 rounded-xl p-2.5">
+                  <div className="text-[10px] font-bold text-slate-500 uppercase">{item.label}</div>
+                  <div className="mt-1 inline-block px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-mono text-[11px] font-bold">
+                    {item.val || 'pending_integration'}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 3. Surveyor Assessment */}
+          <div className="rounded-2xl border border-gray-200 p-4 space-y-3 text-xs">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500">
+              3. Licensed Surveyor Assessment
+            </h3>
+            <div className="grid sm:grid-cols-4 gap-3">
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">Surveyor Name</label>
+                <input
+                  type="text"
+                  value={adjusterForm.surveyor_assessment.surveyor_name || ''}
+                  onChange={(e) =>
+                    setAdjusterForm((p) => ({
+                      ...p,
+                      surveyor_assessment: { ...p.surveyor_assessment, surveyor_name: e.target.value },
+                    }))
+                  }
+                  className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">IRDAI License No</label>
+                <input
+                  type="text"
+                  value={adjusterForm.surveyor_assessment.surveyor_irdai_license_no || ''}
+                  onChange={(e) =>
+                    setAdjusterForm((p) => ({
+                      ...p,
+                      surveyor_assessment: { ...p.surveyor_assessment, surveyor_irdai_license_no: e.target.value },
+                    }))
+                  }
+                  className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs font-mono"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">Odometer Reading (km)</label>
+                <input
+                  type="number"
+                  value={adjusterForm.surveyor_assessment.odometer_reading_km ?? ''}
+                  onChange={(e) =>
+                    setAdjusterForm((p) => ({
+                      ...p,
+                      surveyor_assessment: { ...p.surveyor_assessment, odometer_reading_km: e.target.value ? Number(e.target.value) : null },
+                    }))
+                  }
+                  className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">Damage Freshness</label>
+                <select
+                  value={adjusterForm.surveyor_assessment.damage_freshness_classification || 'pending'}
+                  onChange={(e) =>
+                    setAdjusterForm((p) => ({
+                      ...p,
+                      surveyor_assessment: { ...p.surveyor_assessment, damage_freshness_classification: e.target.value as any },
+                    }))
+                  }
+                  className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs bg-white"
+                >
+                  <option value="pending">Pending</option>
+                  <option value="fresh">Fresh</option>
+                  <option value="pre_existing">Pre-existing</option>
+                  <option value="mixed">Mixed</option>
+                </select>
+              </div>
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">IMT GR-9 Depreciation (INR)</label>
+                <input
+                  type="number"
+                  value={adjusterForm.surveyor_assessment.imt_gr9_depreciation_inr ?? ''}
+                  onChange={(e) =>
+                    setAdjusterForm((p) => ({
+                      ...p,
+                      surveyor_assessment: { ...p.surveyor_assessment, imt_gr9_depreciation_inr: e.target.value ? Number(e.target.value) : null },
+                    }))
+                  }
+                  className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">Salvage Value (INR)</label>
+                <input
+                  type="number"
+                  value={adjusterForm.surveyor_assessment.salvage_value_inr ?? ''}
+                  onChange={(e) =>
+                    setAdjusterForm((p) => ({
+                      ...p,
+                      surveyor_assessment: { ...p.surveyor_assessment, salvage_value_inr: e.target.value ? Number(e.target.value) : null },
+                    }))
+                  }
+                  className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-gray-600 mb-1">Net Assessed Payable (INR)</label>
+                <input
+                  type="number"
+                  value={adjusterForm.surveyor_assessment.net_assessed_payable_inr ?? ''}
+                  onChange={(e) =>
+                    setAdjusterForm((p) => ({
+                      ...p,
+                      surveyor_assessment: { ...p.surveyor_assessment, net_assessed_payable_inr: e.target.value ? Number(e.target.value) : null },
+                    }))
+                  }
+                  className="w-full rounded-xl border border-gray-300 px-3 py-1.5 text-xs"
+                />
+              </div>
+              <div className="flex items-end pb-1">
+                <label className="flex items-center gap-2 font-semibold text-gray-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(adjusterForm.surveyor_assessment.constructive_total_loss)}
+                    onChange={(e) =>
+                      setAdjusterForm((p) => ({
+                        ...p,
+                        surveyor_assessment: { ...p.surveyor_assessment, constructive_total_loss: e.target.checked },
+                      }))
+                    }
+                    className="rounded text-brand-600"
+                  />
+                  Constructive Total Loss (CTL)
+                </label>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

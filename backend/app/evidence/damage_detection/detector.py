@@ -37,6 +37,53 @@ BIKE_DAMAGE_CLASSES = {
 }
 
 DAMAGE_CONF_THRESHOLD = 0.30
+PERSON_OVERLAP_REJECT_RATIO = 0.35
+
+
+def _box_overlap_ratio(inner_bbox: List[float], outer_bbox: List[float]) -> float:
+    """Compute fraction of `inner_bbox` area covered by `outer_bbox`."""
+    ix1 = max(inner_bbox[0], outer_bbox[0])
+    iy1 = max(inner_bbox[1], outer_bbox[1])
+    ix2 = min(inner_bbox[2], outer_bbox[2])
+    iy2 = min(inner_bbox[3], outer_bbox[3])
+    inter_area = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+    inner_area = max(1.0, max(0.0, inner_bbox[2] - inner_bbox[0]) * max(0.0, inner_bbox[3] - inner_bbox[1]))
+    return inter_area / inner_area
+
+
+def _filter_detections_against_persons(
+    res_dict: Dict[str, Any],
+    person_bboxes: Optional[List[List[float]]],
+    vehicle_bboxes: Optional[List[List[float]]] = None,
+) -> Dict[str, Any]:
+    """
+    Drop any damage box that falls predominantly on a detected person rather than a vehicle.
+    Prevents human faces/clothing from ever receiving hallucinated dent/scratch overlays.
+    """
+    if not person_bboxes or not res_dict.get("detections"):
+        return res_dict
+
+    v_boxes = vehicle_bboxes or []
+    kept: List[Dict[str, Any]] = []
+    for det in res_dict["detections"]:
+        db = det.get("bbox")
+        if not db or len(db) != 4:
+            continue
+        max_p_overlap = max((_box_overlap_ratio(db, pb) for pb in person_bboxes), default=0.0)
+        max_v_overlap = max((_box_overlap_ratio(db, vb) for vb in v_boxes), default=0.0)
+        if max_p_overlap >= PERSON_OVERLAP_REJECT_RATIO and max_p_overlap > max_v_overlap:
+            continue
+        kept.append(det)
+
+    damage_types_set = {d["class_name"] for d in kept}
+    max_conf = max((float(d["confidence"]) for d in kept), default=0.0)
+    return {
+        "damage_detected": len(kept) > 0,
+        "damage_count": len(kept),
+        "detected_damage_types": sorted(damage_types_set),
+        "max_confidence": round(max_conf, 4),
+        "detections": kept,
+    }
 
 
 class DamageDetector:
@@ -135,20 +182,49 @@ class DamageDetector:
         stage3a_category: str = "unknown",
         stage3a_four_wheeler_conf: float = 0.0,
         stage3a_two_wheeler_conf: float = 0.0,
+        stage3a_vehicle_detected: bool = False,
+        stage3a_person_detected: bool = False,
+        stage3a_non_vehicle_subject_detected: bool = False,
+        stage3a_person_bboxes: Optional[List[List[float]]] = None,
+        stage3a_vehicle_bboxes: Optional[List[List[float]]] = None,
     ) -> Dict[str, Any]:
         """
         Run both CarDD and Bike damage detectors, resolve close-up vehicle category if Stage 3A
         was 'unknown' or low-confidence misclassified on a 2W close-up, and select active damages.
+        Strictly short-circuits to 0 damages when a person/selfie or non-vehicle object is
+        detected without any motor vehicle, and spatially masks person bounding boxes.
         """
         normalized_claimed = normalize_vehicle_type(claimed_vehicle_type)
+
+        if not stage3a_vehicle_detected and (stage3a_person_detected or stage3a_non_vehicle_subject_detected):
+            return {
+                "damage_detected": False,
+                "damage_count": 0,
+                "detected_damage_types": [],
+                "max_confidence": 0.0,
+                "detections": [],
+                "resolved_vehicle_category": "unknown",
+                "car_damage_max_confidence": 0.0,
+                "bike_damage_max_confidence": 0.0,
+                "car_damage_types": [],
+                "bike_damage_types": [],
+            }
 
         with Image.open(io.BytesIO(file_bytes)) as img:
             rgb_img = img.convert("RGB")
             img_w, img_h = rgb_img.size
 
         img_area = max(1.0, float(img_w * img_h))
-        car_res = self._run_yolo(self.car_model, rgb_img, img_area, CARDD_DAMAGE_CLASSES)
-        bike_res = self._run_yolo(self.bike_model, rgb_img, img_area, BIKE_DAMAGE_CLASSES)
+        car_res = _filter_detections_against_persons(
+            self._run_yolo(self.car_model, rgb_img, img_area, CARDD_DAMAGE_CLASSES),
+            stage3a_person_bboxes,
+            stage3a_vehicle_bboxes,
+        )
+        bike_res = _filter_detections_against_persons(
+            self._run_yolo(self.bike_model, rgb_img, img_area, BIKE_DAMAGE_CLASSES),
+            stage3a_person_bboxes,
+            stage3a_vehicle_bboxes,
+        )
 
         car_max_conf = float(car_res["max_confidence"])
         bike_max_conf = float(bike_res["max_confidence"])
@@ -166,6 +242,17 @@ class DamageDetector:
             and bike_res["damage_detected"]
         ):
             resolved_category = "two_wheeler"
+
+        # Symmetric guard: close-up crumpled car parts (bumper/bonnet) can emit a low-conf COCO
+        # bicycle/motorcycle false positive with zero bike damage while CarDD sees strong car damage.
+        if (
+            normalized_claimed == "two_wheeler"
+            and resolved_category == "two_wheeler"
+            and stage3a_two_wheeler_conf <= 0.45
+            and not bike_res["damage_detected"]
+            and car_max_conf >= 0.65
+        ):
+            resolved_category = "four_wheeler"
 
         if resolved_category == "unknown":
             if normalized_claimed == "two_wheeler":
@@ -215,6 +302,11 @@ def run_stage3b_damage_detection(
     stage3a_category: str = "unknown",
     stage3a_four_wheeler_conf: float = 0.0,
     stage3a_two_wheeler_conf: float = 0.0,
+    stage3a_vehicle_detected: bool = False,
+    stage3a_person_detected: bool = False,
+    stage3a_non_vehicle_subject_detected: bool = False,
+    stage3a_person_bboxes: Optional[List[List[float]]] = None,
+    stage3a_vehicle_bboxes: Optional[List[List[float]]] = None,
 ) -> Dict[str, Any]:
     """Run Stage 3B Dual Vehicle Damage Detection."""
     return get_damage_detector().detect(
@@ -223,4 +315,9 @@ def run_stage3b_damage_detection(
         stage3a_category=stage3a_category,
         stage3a_four_wheeler_conf=stage3a_four_wheeler_conf,
         stage3a_two_wheeler_conf=stage3a_two_wheeler_conf,
+        stage3a_vehicle_detected=stage3a_vehicle_detected,
+        stage3a_person_detected=stage3a_person_detected,
+        stage3a_non_vehicle_subject_detected=stage3a_non_vehicle_subject_detected,
+        stage3a_person_bboxes=stage3a_person_bboxes,
+        stage3a_vehicle_bboxes=stage3a_vehicle_bboxes,
     )

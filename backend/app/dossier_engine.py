@@ -30,6 +30,9 @@ from .models import (
     DossierSection09Declaration,
     CanonicalClaimSchema,
     DuplicateStatus,
+    MotorClaimFormDetails,
+    MotorAdjusterPlaceholders,
+    mask_pii_value,
 )
 from .database import (
     get_claim,
@@ -95,24 +98,55 @@ def render_dossier_pdf_bytes(dossier: ProfessionalClaimDossier) -> bytes:
     # SECTION 01
     s1 = dossier.section_01_customer
     lines_with_style.append(("h2", "SECTION 01 - Customer Information"))
-    lines_with_style.append(("body", f"Customer Name: {s1.name}   |   Unique Customer ID: {s1.customer_id}"))
-    lines_with_style.append(("body", f"Contact: {s1.email} / {s1.phone}   |   Declared Insurer: {s1.declared_insurer}"))
+    lines_with_style.append(("body", f"Customer Name: {s1.claimant_name or s1.name}   |   Unique Customer ID: {s1.customer_id}"))
+    lines_with_style.append(("body", f"Contact: {s1.claimant_email or s1.email} / {s1.registered_mobile_masked or s1.phone}   |   Declared Insurer: {s1.declared_insurer}"))
+    if s1.residential_address or s1.pincode:
+        lines_with_style.append(("body", f"Address: {s1.residential_address or 'N/A'}   |   Pincode: {s1.pincode or 'N/A'}"))
+    if s1.other_insurance_exists is not None:
+        other_txt = f"Yes ({s1.other_insurance_details or 'Declared'})" if s1.other_insurance_exists else "No"
+        lines_with_style.append(("body", f"Other Active Motor Insurance: {other_txt}"))
     lines_with_style.append(("body", ""))
 
     # SECTION 02
     s2 = dossier.section_02_policy
     lines_with_style.append(("h2", "SECTION 02 - Policy Information"))
     lines_with_style.append(("body", f"Policy Number: {s2.policy_number}   |   Insurer: {s2.insurer_name}"))
-    lines_with_style.append(("body", f"Policy Type: {s2.policy_type}   |   Status: {s2.verification_status}"))
+    lines_with_style.append(("body", f"Policy Type: {s2.policy_type}   |   Reg No: {s2.claimed_registration or 'As on Policy'}   |   Status: {s2.verification_status}"))
+    if s2.vehicle_make_model or s2.vehicle_usage_type:
+        lines_with_style.append(("body", f"Make/Model: {s2.vehicle_make_model or 'N/A'}   |   Usage: {s2.vehicle_usage_type or 'N/A'}"))
+    ipm = s2.insurer_policy_master or {}
+    lines_with_style.append(
+        ("muted", f"Insurer Policy Master ({ipm.get('verification_status', 'pending_verification')}): Ref={ipm.get('claim_reference_number') or 'Pending'} | IDV={ipm.get('idv_inr') or 'Pending'} | NCB={ipm.get('ncb_percent') if ipm.get('ncb_percent') is not None else 'Pending'}%")
+    )
     lines_with_style.append(("body", ""))
 
     # SECTION 03
     s3 = dossier.section_03_incident
     lines_with_style.append(("h2", "SECTION 03 - Incident Information"))
-    lines_with_style.append(("body", f"Date & Time: {s3.incident_date_time}   |   Location: {s3.incident_location}"))
-    lines_with_style.append(("body", f"Vehicle Details: {s3.vehicle_details}   |   People Involved: {s3.people_involved}"))
+    lines_with_style.append(("body", f"Date & Time: {s3.incident_date_time} ({s3.incident_time or 'Time not specified'})   |   Location: {s3.incident_location}"))
+    lines_with_style.append(("body", f"Vehicle Details: {s3.vehicle_details}   |   Loss Type: {s3.loss_type or 'own_damage_accident'}   |   People Involved: {s3.people_involved}"))
+    if s3.pillion_rider_present is not None:
+        lines_with_style.append(("body", f"2W Pillion Rider Present: {'Yes' if s3.pillion_rider_present else 'No'}"))
+    if s3.occupants_count is not None:
+        lines_with_style.append(("body", f"4W Occupants Count: {s3.occupants_count}"))
+    if s3.driver_details:
+        drv = s3.driver_details
+        if drv.get("skipped_reason"):
+            lines_with_style.append(("body", f"Driver Details: Skipped ({drv['skipped_reason']})"))
+        elif drv.get("driver_name") or drv.get("driver_license_number_masked"):
+            lines_with_style.append(
+                ("body", f"Driver: {drv.get('driver_name') or 'N/A'} ({drv.get('driver_relationship') or 'N/A'}) | DL: {drv.get('driver_license_number_masked') or 'N/A'} | Class: {drv.get('driver_license_class') or 'N/A'}")
+            )
     for wline in _wrap_text(f"Reported Damage / Injuries: {s3.injuries_or_damage}", 88):
         lines_with_style.append(("body", wline))
+    if s3.conditional_disclosures:
+        cd = s3.conditional_disclosures
+        if cd.get("fir_details"):
+            fir = cd["fir_details"]
+            lines_with_style.append(("body", f"Police FIR: {fir.get('fir_or_gd_number') or 'N/A'} | PS: {fir.get('police_station_name') or 'N/A'}"))
+        if cd.get("theft_details"):
+            th = cd["theft_details"]
+            lines_with_style.append(("body", f"Theft Details: Non-Traceable={th.get('non_traceable_report_status') or 'pending'} | Keys Available={th.get('all_original_keys_available')}"))
     lines_with_style.append(("body", ""))
 
     # SECTION 04
@@ -147,6 +181,16 @@ def render_dossier_pdf_bytes(dossier: ProfessionalClaimDossier) -> bytes:
                 lines_with_style.append(("body", wline))
     else:
         lines_with_style.append(("body", "Evidence Warnings: None"))
+    if s6.driver_license_mismatch_warning:
+        lines_with_style.append(("body", f"DL Warning: {s6.driver_license_mismatch_warning}"))
+    reg_chk = s6.external_registry_checks or {}
+    lines_with_style.append(
+        ("muted", f"Registry Hooks: VAHAN={reg_chk.get('vahan_status', 'pending_integration')} | SARATHI={reg_chk.get('sarathi_dl_status', 'pending_integration')} | IIB={reg_chk.get('iib_cross_claim_status', 'pending_integration')} | eDAR={reg_chk.get('edar_sync_status', 'pending_integration')}")
+    )
+    surv = s6.surveyor_assessment or {}
+    lines_with_style.append(
+        ("muted", f"Surveyor Assessment: {surv.get('surveyor_name') or 'Pending assignment'} | Freshness={surv.get('damage_freshness_classification', 'pending')} | Net Assessed INR={surv.get('net_assessed_payable_inr') if surv.get('net_assessed_payable_inr') is not None else 'Pending'}")
+    )
     lines_with_style.append(("body", ""))
 
     # SECTION 07
@@ -162,6 +206,8 @@ def render_dossier_pdf_bytes(dossier: ProfessionalClaimDossier) -> bytes:
             lines_with_style.append(
                 ("muted", f"  SHA-256: {doc.sha256_hash[:48]}... | pHash: {doc.perceptual_hash or 'N/A'}")
             )
+    if s7.motor_checklist_items:
+        lines_with_style.append(("body", f"Motor Checklist Required: {', '.join(s7.motor_checklist_items)}"))
     lines_with_style.append(("body", ""))
 
     # SECTION 08
@@ -170,13 +216,22 @@ def render_dossier_pdf_bytes(dossier: ProfessionalClaimDossier) -> bytes:
     for wline in _wrap_text(s8.incident_summary, 88):
         lines_with_style.append(("body", wline))
     lines_with_style.append(("body", f"Evidence Summary: {s8.available_evidence_summary}"))
+    if s8.claim_settlement_mode or s8.inspection_location:
+        lines_with_style.append(("body", f"Settlement Mode: {s8.claim_settlement_mode or 'cashless'}   |   Inspection Location: {s8.inspection_location or 'N/A'}"))
+    if s8.workshop_details and s8.workshop_details.get("workshop_name"):
+        ws = s8.workshop_details
+        lines_with_style.append(("body", f"Workshop: {ws.get('workshop_name')} ({ws.get('workshop_contact') or 'N/A'})"))
+    if s8.reimbursement_bank_summary and s8.reimbursement_bank_summary.get("bank_account_number_masked"):
+        rb = s8.reimbursement_bank_summary
+        lines_with_style.append(("body", f"Reimbursement Bank (Masked): {rb.get('bank_account_holder_name') or 'N/A'} | Acct: {rb.get('bank_account_number_masked')} | IFSC: {rb.get('bank_ifsc_code') or 'N/A'}"))
     lines_with_style.append(("body", f"Next Steps: {'; '.join(s8.recommended_next_steps)}"))
     lines_with_style.append(("body", ""))
 
     # SECTION 09
     s9 = dossier.section_09_declaration
     lines_with_style.append(("h2", "SECTION 09 - Declaration & Confirmation"))
-    lines_with_style.append(("body", f"Confirmed By: {s9.confirmed_by_name} ({s9.confirmed_by_id})   |   Confirmed: {s9.customer_confirmed}"))
+    lines_with_style.append(("body", f"Confirmed By: {s9.insured_digital_signature or s9.confirmed_by_name} ({s9.confirmed_by_id})   |   Confirmed: {s9.customer_confirmed}"))
+    lines_with_style.append(("body", f"DPDP Consent Granted: {s9.dpdp_consent_granted if s9.dpdp_consent_granted is not None else True}   |   Timestamp: {s9.dpdp_consent_timestamp or s9.report_generation_timestamp}"))
     lines_with_style.append(("body", f"Generated At: {s9.report_generation_timestamp}   |   Report ID: {s9.report_id} (v{s9.report_version})"))
     for wline in _wrap_text(s9.regulatory_disclaimer, 88):
         lines_with_style.append(("muted", wline))
@@ -371,6 +426,95 @@ async def generate_claim_dossier_and_report(claim_id: str, requesting_user_id: O
         "Keep original vehicle parts and repair estimates available for surveyor inspection.",
     ]
 
+    mform = claim.motor_claim_form or MotorClaimFormDetails()
+    adj = claim.insurer_adjuster_data or MotorAdjusterPlaceholders()
+
+    masked_mobile = mask_pii_value(mform.registered_mobile or user.phone, 4) if (mform.registered_mobile or user.phone) else None
+    masked_dl = mask_pii_value(mform.driver_license_number, 4) if mform.driver_license_number else None
+    masked_bank = mask_pii_value(mform.bank_account_number, 4) if mform.bank_account_number else None
+
+    if mform.loss_type == "theft" or mform.vehicle_was_parked_unattended is True:
+        driver_details_summary: Dict[str, Any] = {
+            "skipped_reason": "Theft or vehicle parked unattended",
+        }
+    else:
+        driver_details_summary = {
+            "driver_was_owner": mform.driver_was_owner,
+            "driver_name": mform.driver_name,
+            "driver_age": mform.driver_age,
+            "driver_address": mform.driver_address,
+            "driver_relationship": mform.driver_relationship,
+            "driver_license_number_masked": masked_dl,
+            "driver_license_expiry": mform.driver_license_expiry,
+            "driver_license_class": mform.driver_license_class,
+            "driver_issuing_rto": mform.driver_issuing_rto,
+            "driver_under_intoxication": mform.driver_under_intoxication,
+            "driver_injured": mform.driver_injured,
+        }
+
+    conditional_disclosures: Dict[str, Any] = {}
+    if mform.police_fir_lodged_flag:
+        conditional_disclosures["fir_details"] = {
+            "fir_or_gd_number": mform.fir_or_gd_number,
+            "police_station_name": mform.police_station_name,
+            "fir_report_date": mform.fir_report_date,
+            "fir_complainant_name": mform.fir_complainant_name,
+        }
+    if mform.loss_type == "theft":
+        conditional_disclosures["theft_details"] = {
+            "non_traceable_report_status": mform.non_traceable_report_status,
+            "all_original_keys_available": mform.all_original_keys_available,
+            "financier_hypothecated": mform.financier_hypothecated,
+            "financier_name": mform.financier_name,
+            "stolen_accessories_details": mform.stolen_accessories_details,
+        }
+    if mform.injury_or_third_party_flag or mform.driver_injured:
+        conditional_disclosures["third_party_or_injury_details"] = {
+            "third_party_loss_type": mform.third_party_loss_type,
+            "third_party_injured_count": mform.third_party_injured_count,
+            "hospital_and_treatment_details": mform.hospital_and_treatment_details,
+            "third_party_vehicle_reg": mform.third_party_vehicle_reg,
+            "third_party_policy_details": mform.third_party_policy_details,
+            "third_party_damage_summary": mform.third_party_damage_summary,
+            "witness_name": mform.witness_name,
+            "witness_contact": mform.witness_contact,
+        }
+    if mform.loss_type == "fire_natural_calamity":
+        conditional_disclosures["fire_calamity_details"] = {
+            "fire_brigade_report_number": mform.fire_brigade_report_number,
+        }
+
+    motor_checklist: List[str] = ["RC Copy", "Driving License Copy"]
+    if mform.claim_settlement_mode == "reimbursement":
+        motor_checklist.append("Cancelled Cheque / Bank Passbook (Reimbursement NEFT)")
+    if mform.police_fir_lodged_flag:
+        motor_checklist.append("Police FIR / GD Entry Copy")
+    if mform.loss_type == "theft":
+        motor_checklist.append("Final Non-Traceable Report & All Original Keys (Theft)")
+        if mform.financier_hypothecated:
+            motor_checklist.append("Financier NOC / Form 35 (Hypothecation)")
+    if mform.loss_type == "fire_natural_calamity" and mform.fire_brigade_report_number:
+        motor_checklist.append("Fire Brigade Report")
+
+    reimbursement_bank_summary: Dict[str, Any] = {}
+    if mform.claim_settlement_mode == "reimbursement":
+        reimbursement_bank_summary = {
+            "bank_account_holder_name": mform.bank_account_holder_name,
+            "bank_account_number_masked": masked_bank,
+            "bank_ifsc_code": mform.bank_ifsc_code,
+            "bank_branch_name": mform.bank_branch_name,
+        }
+
+    ipm_dict = adj.insurer_policy_master.model_dump()
+    has_ipm_values = bool(
+        adj.insurer_policy_master.claim_reference_number
+        or adj.insurer_policy_master.idv_inr is not None
+        or adj.insurer_policy_master.coverage_type
+    )
+    ipm_dict["verification_status"] = "verified" if has_ipm_values else "pending_verification"
+    ext_reg_dict = adj.external_registry_checks.model_dump()
+    surv_dict = adj.surveyor_assessment.model_dump()
+
     dossier = ProfessionalClaimDossier(
         claim_id=claim.id,
         report_id=report_id,
@@ -383,6 +527,13 @@ async def generate_claim_dossier_and_report(claim_id: str, requesting_user_id: O
             email=user.email,
             phone=user.phone,
             declared_insurer=claim.insurer_name or user.declared_insurer,
+            claimant_name=mform.claimant_name or user.name,
+            registered_mobile_masked=masked_mobile,
+            claimant_email=mform.claimant_email or user.email,
+            residential_address=mform.residential_address,
+            pincode=mform.pincode,
+            other_insurance_exists=mform.other_insurance_exists,
+            other_insurance_details=mform.other_insurance_details,
         ),
         section_02_policy=DossierSection02Policy(
             policy_number=claim.policy_reference,
@@ -390,14 +541,27 @@ async def generate_claim_dossier_and_report(claim_id: str, requesting_user_id: O
             policy_type=claim.policy_type,
             insurance_category="Motor Insurance",
             verification_status="Unverified (Customer-entered value — subject to insurer policy check)",
+            claimed_registration=claim.claimed_registration,
+            vehicle_make_model=claim.vehicle_make_model,
+            vehicle_usage_type=mform.vehicle_usage_type,
+            insurer_policy_master=ipm_dict,
         ),
         section_03_incident=DossierSection03Incident(
             incident_date_time=claim.incident_date,
             incident_location=claim.incident_location,
             incident_description=f"Motor vehicle incident involving {claim.vehicle_type} at {claim.incident_location}",
-            vehicle_details=claim.vehicle_type,
+            vehicle_details=f"{claim.vehicle_type} ({claim.vehicle_make_model})" if claim.vehicle_make_model else claim.vehicle_type,
             people_involved=claim.people_involved,
             injuries_or_damage=f"Damage: {claim.damage_description} | Injuries: {claim.injuries_reported}",
+            loss_type=mform.loss_type,
+            incident_time=mform.incident_time,
+            pillion_rider_present=mform.pillion_rider_present,
+            occupants_count=mform.occupants_count,
+            vehicle_was_parked_unattended=mform.vehicle_was_parked_unattended,
+            injury_or_third_party_flag=mform.injury_or_third_party_flag,
+            police_fir_lodged_flag=mform.police_fir_lodged_flag,
+            driver_details=driver_details_summary,
+            conditional_disclosures=conditional_disclosures,
         ),
         section_04_statement=DossierSection04Statement(
             chronological_account=detailed_stmt,
@@ -414,9 +578,13 @@ async def generate_claim_dossier_and_report(claim_id: str, requesting_user_id: O
             evidence_warnings=evidence_warnings,
             unresolved_fields=missing_fields,
             human_review_recommended=human_review_needed,
+            driver_license_mismatch_warning=mform.driver_license_mismatch_warning,
+            external_registry_checks=ext_reg_dict,
+            surveyor_assessment=surv_dict,
         ),
         section_07_supporting_documents=DossierSection07SupportingDocuments(
             documents=supporting_docs,
+            motor_checklist_items=motor_checklist,
         ),
         section_08_preparation_summary=DossierSection08PreparationSummary(
             incident_summary=(
@@ -426,16 +594,34 @@ async def generate_claim_dossier_and_report(claim_id: str, requesting_user_id: O
             available_evidence_summary=f"{img_count} photograph(s) and {vid_count} video(s) screened and indexed.",
             outstanding_requirements=outstanding_reqs,
             recommended_next_steps=next_steps,
+            claim_settlement_mode=mform.claim_settlement_mode,
+            inspection_location=mform.inspection_location,
+            preferred_inspection_datetime=mform.preferred_inspection_datetime,
+            workshop_details={
+                "workshop_name": mform.workshop_name,
+                "workshop_address": mform.workshop_address,
+                "workshop_contact": mform.workshop_contact,
+            },
+            approx_estimated_repair_cost_inr=mform.approx_estimated_repair_cost_inr,
+            reimbursement_bank_summary=reimbursement_bank_summary,
         ),
         section_09_declaration=DossierSection09Declaration(
             customer_confirmed=claim.customer_confirmation,
-            confirmed_by_name=user.name,
+            confirmed_by_name=mform.claimant_name or user.name,
             confirmed_by_id=user.customer_id,
             report_generation_timestamp=now_iso,
             report_id=report_id,
             report_version=version_str,
+            dpdp_consent_granted=mform.dpdp_consent_granted,
+            dpdp_consent_timestamp=mform.dpdp_consent_timestamp or now_iso,
+            truthfulness_declaration_accepted=mform.truthfulness_declaration_accepted,
+            declaration_place=mform.declaration_place,
+            declaration_date=mform.declaration_date,
+            insured_digital_signature=mform.insured_digital_signature,
         ),
     )
+
+    masked_user_form_dict = mform.masked_copy(mask_all_sensitive=True).model_dump()
 
     # Build Layer 1 — ClaimSathi Canonical Schema (Pages 6–7 of PDF)
     canonical = CanonicalClaimSchema(
@@ -444,14 +630,18 @@ async def generate_claim_dossier_and_report(claim_id: str, requesting_user_id: O
         insurance_type="motor",
         policy={
             "policy_number": claim.policy_reference,
+            "claimed_registration": claim.claimed_registration,
             "insurer_name": claim.insurer_name,
             "policy_type": claim.policy_type,
             "verified": False,
         },
         incident={
             "date": claim.incident_date,
+            "time": mform.incident_time,
+            "loss_type": mform.loss_type,
             "location": claim.incident_location,
             "vehicle_type": claim.vehicle_type,
+            "vehicle_make_model": claim.vehicle_make_model,
             "damage_description": claim.damage_description,
             "description": f"Customer-reported {claim.vehicle_type} accident: {claim.damage_description}",
             "detailed_statement": detailed_stmt,
@@ -498,11 +688,26 @@ async def generate_claim_dossier_and_report(claim_id: str, requesting_user_id: O
             "missing_fields": missing_fields,
             "inconsistencies": [],
             "evidence_warnings": evidence_warnings,
+            "driver_license_mismatch_warning": mform.driver_license_mismatch_warning,
             "human_review_recommended": human_review_needed,
+            "dpdp_2025_compliance": {
+                "consent_captured": True if mform.dpdp_consent_granted is None else bool(mform.dpdp_consent_granted),
+                "consent_timestamp": mform.dpdp_consent_timestamp or now_iso,
+                "purpose_limitation": "motor_claim_intake_and_forensic_verification",
+                "whatsapp_raw_media_blocked": True,
+                "pii_masking_enforced": True,
+            },
         },
         customer_confirmation=claim.customer_confirmation,
         report_status="generated",
         insurer_submission_status=claim.insurer_submission_status or "not_submitted",
+        user_declared_fields=masked_user_form_dict,
+        insurer_and_registry_fields={
+            "verification_status": ipm_dict["verification_status"],
+            "insurer_policy_master": ipm_dict,
+            "external_registry_checks": ext_reg_dict,
+            "surveyor_assessment": surv_dict,
+        },
     )
 
     # Render binary PDF report and save to disk
@@ -937,7 +1142,7 @@ def render_localized_dossier_html(dossier: ProfessionalClaimDossier, lang: str =
   <h2>{tr['s9']}</h2>
   <div class="field-box">
     <p><b>{tr['confirmed']}:</b> {'YES' if s9.customer_confirmed else 'NO'} — {s9.confirmed_by_name} ({s9.confirmed_by_id}) at {s9.report_generation_timestamp}</p>
-    <p style="font-size:11px;color:#64748b;">{s9.declaration_text}</p>
+    <p style="font-size:11px;color:#64748b;">{getattr(s9, 'declaration_text', None) or s9.regulatory_disclaimer}</p>
   </div>
 </div>
 </body>

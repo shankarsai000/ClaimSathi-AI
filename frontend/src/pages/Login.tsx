@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { api, getStoredUser } from '../api'
 import { useAppSettings } from '../i18n'
 import {
@@ -152,6 +152,14 @@ export default function Login() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center mb-6">
+        <div className="mb-3">
+          <Link
+            to="/"
+            className="inline-flex items-center gap-1 text-xs font-semibold text-gray-500 hover:text-brand-700 transition-colors"
+          >
+            &larr; Back to ClaimSathi AI Overview
+          </Link>
+        </div>
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-[11px] font-bold mb-3 shadow-xs">
           <Shield className="w-3.5 h-3.5" />
           {t('login_badge')}

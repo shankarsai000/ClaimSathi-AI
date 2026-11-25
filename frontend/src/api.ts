@@ -24,6 +24,9 @@ import type {
   ClaimRecord,
   EvidenceVerificationReport,
   EvidenceVerificationHistoryResponse,
+  GovernanceMetricsResponse,
+  WhatsappHandoffResponse,
+  MotorAdjusterPlaceholders,
 } from './types'
 
 const BASE = '/api'
@@ -139,6 +142,7 @@ export const api = {
     knownFields?: Record<string, string | null>,
     history?: Array<{ sender: 'user' | 'assistant'; text: string }>,
     expectedField?: string | null,
+    knownMotorSlots?: Record<string, any>,
   ): Promise<VoiceTranscribeResponse> => {
     const formData = new FormData()
     formData.append('audio_file', audioBlob, filename)
@@ -148,6 +152,9 @@ export const api = {
     }
     if (knownFields) {
       formData.append('known_fields_json', JSON.stringify(knownFields))
+    }
+    if (knownMotorSlots && Object.keys(knownMotorSlots).length > 0) {
+      formData.append('known_motor_slots_json', JSON.stringify(knownMotorSlots))
     }
     if (history && history.length > 0) {
       formData.append('history_json', JSON.stringify(history))
@@ -349,6 +356,12 @@ export const api = {
       body: JSON.stringify(updates),
     }),
 
+  updateAdjusterAssessment: (claimId: string, payload: Partial<MotorAdjusterPlaceholders>) =>
+    request<ClaimRecord>(`/claims/${encodeURIComponent(claimId)}/adjuster-assessment`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+
   generateReport: (claimId: string) =>
     request<ReportRecord>(`/claims/${encodeURIComponent(claimId)}/report`, {
       method: 'POST',
@@ -407,11 +420,27 @@ export const api = {
   verifyEvidenceV1: async (
     file: File,
     claimedVehicleType: 'four_wheeler' | 'two_wheeler' = 'four_wheeler',
+    vehicleMakeModel?: string,
+    claimedRegistration?: string,
+    captureSessionId?: string,
+    captureMethod: string = 'upload_photo',
+    lockSessionOnVerify: boolean = false,
   ): Promise<EvidenceVerificationReport> => {
     const token = getStoredToken()
     const formData = new FormData()
     formData.append('file', file)
     formData.append('claimed_vehicle_type', claimedVehicleType)
+    if (vehicleMakeModel && vehicleMakeModel.trim()) {
+      formData.append('vehicle_make_model', vehicleMakeModel.trim())
+    }
+    if (claimedRegistration && claimedRegistration.trim()) {
+      formData.append('claimed_registration', claimedRegistration.trim())
+    }
+    if (captureSessionId && captureSessionId.trim()) {
+      formData.append('capture_session_id', captureSessionId.trim())
+      formData.append('capture_method', captureMethod)
+      formData.append('lock_session_on_verify', String(lockSessionOnVerify))
+    }
     const resp = await fetch(`${BASE}/v1/evidence/verify`, {
       method: 'POST',
       headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -424,23 +453,42 @@ export const api = {
     return resp.json()
   },
 
+  createWhatsappLiveCameraHandoff: (
+    claimId?: string | null,
+    phone?: string,
+    claimedRegistration?: string,
+  ) =>
+    request<WhatsappHandoffResponse>('/v1/evidence/whatsapp-handoff', {
+      method: 'POST',
+      body: JSON.stringify({
+        claim_id: claimId || undefined,
+        phone: phone || undefined,
+        claimed_registration: claimedRegistration || undefined,
+      }),
+    }),
+
   getEvidenceHistoryV1: (limit: number = 25) =>
     request<EvidenceVerificationHistoryResponse>(`/v1/evidence/history?limit=${limit}`),
+
+  getGovernanceMetricsV1: () =>
+    request<GovernanceMetricsResponse>('/v1/evidence/governance-metrics'),
 
   getEvidenceVerificationByIdV1: (evidenceId: string) =>
     request<EvidenceVerificationReport>(`/v1/evidence/${encodeURIComponent(evidenceId)}`),
 
-  // ── Sprint 1.7: Reviewer Decision Override & Official Claim Creation ──
+  // ── Sprint 1.7 / 2.1: Reviewer Decision Override (with IRDAI Tagging) & Official Claim Creation ──
   overrideEvidenceDecision: (
     evidenceId: string,
     newDecision: 'PASS' | 'REJECT',
     reviewerNote: string = 'Manual adjuster review completed.',
+    overrideReasonTag: string = 'FALSE_POSITIVE_GENUINE_DAMAGE',
   ) =>
     request<EvidenceVerificationReport>(`/v1/evidence/${encodeURIComponent(evidenceId)}/override`, {
       method: 'POST',
       body: JSON.stringify({
         new_decision: newDecision,
         reviewer_note: reviewerNote,
+        override_reason_tag: overrideReasonTag,
       }),
     }),
 

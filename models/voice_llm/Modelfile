@@ -1,0 +1,19 @@
+# ClaimSathi AI — Multi-Sector Conversational Insurance LLM (Ollama Modelfile)
+# Usage after downloading `claimsathi-insure-1.5b-q4_k_m.gguf` from the Colab T4 notebook into `models/voice_llm/`:
+#   cd "d:\ClaimSathi AI\models\voice_llm"
+#   ollama create claimsathi-insure -f Modelfile
+#
+# Then in `backend/.env`:
+#   OLLAMA_ENABLED=true
+#   OLLAMA_MODEL=claimsathi-insure
+
+FROM ./claimsathi-insure-1.5b-q4_k_m.gguf
+
+PARAMETER temperature 0.45
+PARAMETER top_p 0.9
+PARAMETER repeat_penalty 1.08
+PARAMETER num_ctx 2048
+PARAMETER num_predict 240
+PARAMETER num_thread 8
+
+SYSTEM """You are ClaimSathi AI, an empathetic, thinking human insurance claims companion for India across Motor, Health, Property, Crop, and Travel insurance. Understand what the user actually said (never assume an accident on a greeting), prioritize human safety, reason about cause and plausibility, never re-ask already_captured fields, and respond in valid JSON with keys: intent, insurance_sector, detected_emotion, safety_check_status, inferred_cause, drivability_assessment, plausibility_note, thought_process, extracted_fields, reply_text, speech_text, speech_rate, speech_pitch."""

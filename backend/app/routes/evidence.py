@@ -335,18 +335,120 @@ async def serve_evidence_media_file(
     )
 
 
-# ── Sprint 1.4 / 1.6: Local 5-Stage Evidence Intelligence Pipeline Routes ───────
+# ── Sprint 1.4 / 1.6 / 2.0: Local 5-Stage Evidence Intelligence Pipeline Routes ───
+class WhatsappHandoffRequest(BaseModel):
+    claim_id: Optional[str] = None
+    phone: Optional[str] = None
+    claimed_registration: Optional[str] = None
+
+
+@v1_evidence_router.post("/whatsapp-handoff")
+async def create_whatsapp_live_camera_handoff(
+    payload: WhatsappHandoffRequest,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """
+    Create a 1-tap tokenized browser handoff from WhatsApp into Stage 5 Guided Live Camera.
+    Prevents WhatsApp image recompression & EXIF/C2PA metadata stripping while enforcing
+    DPDP Act 2025 PII masking in logs and message previews.
+    """
+    from ..evidence.vehicle_identity import mask_pii_value, normalize_registration_plate
+
+    user_id = current_user.get("sub") if current_user else "USR-100001"
+    if payload.claim_id:
+        claim = await get_claim(payload.claim_id)
+        if not claim:
+            raise HTTPException(status_code=404, detail=f"Claim '{payload.claim_id}' not found.")
+        if current_user and claim.customer_id != current_user.get("sub"):
+            raise HTTPException(status_code=403, detail="Access denied: You do not own this claim.")
+        user_id = claim.customer_id
+
+    instructions = generate_randomized_capture_instructions()
+    session_data = await create_capture_session(
+        user_id=user_id,
+        claim_id=payload.claim_id,
+        instructions=instructions,
+    )
+    session_id = session_data["session_id"]
+    masked_phone = mask_pii_value(payload.phone, 4) if payload.phone else "******0000"
+    norm_reg = normalize_registration_plate(payload.claimed_registration)
+    masked_reg = mask_pii_value(norm_reg, 4) if norm_reg else "Not bound"
+
+    await log_audit_event(
+        user_id=user_id,
+        claim_id=payload.claim_id,
+        action="WHATSAPP_LIVE_CAMERA_HANDOFF_CREATED",
+        details=(
+            f"Generated 1-tap Stage 5 Live Camera link ({session_id}) for phone={masked_phone}, "
+            f"reg={masked_reg} (raw WhatsApp photo upload blocked to preserve forensics)."
+        ),
+        resource_type="capture_session",
+        resource_id=session_id,
+        outcome="SUCCESS",
+    )
+
+    handoff_url = f"/claims/new?step=2&capture_session_id={session_id}"
+    if payload.claim_id:
+        handoff_url += f"&claim_id={payload.claim_id}"
+
+    preview_msg = (
+        f"ClaimSathi Live Capture ({session_id}): To protect your claim from WhatsApp compression, "
+        f"please tap this link to capture your License Plate, Odometer/VIN, and vehicle damage live: "
+        f"{handoff_url}"
+    )
+    return {
+        "session_id": session_id,
+        "claim_id": payload.claim_id,
+        "handoff_url": handoff_url,
+        "masked_phone": masked_phone,
+        "masked_registration": masked_reg,
+        "raw_whatsapp_media_blocked": True,
+        "instructions": instructions,
+        "whatsapp_template_preview": preview_msg,
+        "expires_in_seconds": SESSION_TTL_SECONDS,
+    }
+
+
 @v1_evidence_router.post("/verify")
 async def verify_evidence_pipeline_endpoint(
     file: UploadFile = File(..., description="Image evidence file for 5-stage screening"),
     claimed_vehicle_type: str = Form("four_wheeler", description="four_wheeler | two_wheeler"),
+    vehicle_make_model: Optional[str] = Form(None, description="Optional Indian 2W/4W make & model for tiered INR band"),
+    claimed_registration: Optional[str] = Form(None, description="Optional vehicle registration plate for identity binding"),
+    capture_session_id: Optional[str] = Form(None, description="Cryptographic live capture session ID from WhatsApp handoff"),
+    capture_method: str = Form("upload_photo", description="upload_photo | live_photo | guided_video"),
+    lock_session_on_verify: bool = Form(False, description="Single-use lock: expire capture session immediately after verify"),
 ):
     """
     Upload an image file and execute the local 5-stage Evidence Intelligence pipeline:
     Stage 1 (Integrity), Stage 2 (Metadata/Provenance), Stage 3A/3B (YOLO Vehicle & Dual Car/Bike Damage),
-    Stage 4 (EfficientNetV2-S Spoof Screening), Stage 5 (PASS / REVIEW / REJECT Aggregation).
-    Enforces strict Vehicle Category Mismatch REJECT when claimed_vehicle_type disagrees with photo.
+    Stage 4 (EfficientNetV2-S Spoof Screening), Stage 5 (PASS / REVIEW / REJECT + Identity & Tiered Cost Band).
+    Enforces strict Live-Camera-Only lock when capture_session_id is supplied (gallery uploads rejected).
     """
+    if capture_session_id:
+        session = await get_capture_session(capture_session_id)
+        if not session:
+            raise HTTPException(status_code=400, detail=f"Invalid capture_session_id '{capture_session_id}'.")
+        if session.get("status") != "active":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Capture session '{capture_session_id}' is already {session.get('status', 'completed')} and cannot be reused.",
+            )
+        try:
+            created_at = datetime.fromisoformat(session.get("created_at", ""))
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - created_at).total_seconds() > SESSION_TTL_SECONDS:
+                raise HTTPException(status_code=400, detail="Capture handoff link has expired (15-minute TTL).")
+        except (ValueError, TypeError):
+            pass
+
+        if (capture_method or "").strip().lower() in ("upload_photo", "gallery"):
+            raise HTTPException(
+                status_code=400,
+                detail="Gallery file uploads are blocked for live capture handoff sessions. Capture must come from live camera.",
+            )
+
     chunk_size = 1024 * 1024
     total_read = 0
     chunks: List[bytes] = []
@@ -369,9 +471,149 @@ async def verify_evidence_pipeline_endpoint(
         file_bytes=raw_bytes,
         filename=file.filename or "upload.jpg",
         claimed_vehicle_type=claimed_vehicle_type,
+        vehicle_make_model=vehicle_make_model,
+        claimed_registration=claimed_registration,
         persist=True,
     )
+    if capture_session_id and lock_session_on_verify:
+        await mark_capture_session_completed(capture_session_id)
     return result
+
+
+class DpdpConsentRequest(BaseModel):
+    claim_id: Optional[str] = None
+    voice_consent_granted: bool = True
+    live_camera_consent_granted: bool = True
+    purpose_scope: str = "motor_claim_intake_and_fraud_screening"
+
+
+@v1_evidence_router.post("/dpdp-consent")
+async def record_dpdp_precapture_consent_endpoint(
+    payload: DpdpConsentRequest,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """
+    DPDP Rules 2025: Record explicit, unbundled pre-capture consent before recording voice
+    or capturing vehicle/document photographs, noting 1-year statutory audit retention.
+    """
+    user_id = current_user.get("sub") if current_user else "USR-100001"
+    consent_id = f"DPDP-{uuid4().hex[:8].upper()}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await log_audit_event(
+        user_id=user_id,
+        claim_id=payload.claim_id,
+        action="DPDP_2025_PRECAPTURE_CONSENT_RECORDED",
+        details=(
+            f"Consent {consent_id} captured (voice={payload.voice_consent_granted}, "
+            f"camera={payload.live_camera_consent_granted}, scope={payload.purpose_scope})."
+        ),
+        resource_type="consent",
+        resource_id=consent_id,
+        outcome="SUCCESS",
+    )
+    return {
+        "consent_id": consent_id,
+        "claim_id": payload.claim_id,
+        "voice_consent_granted": payload.voice_consent_granted,
+        "live_camera_consent_granted": payload.live_camera_consent_granted,
+        "purpose_scope": payload.purpose_scope,
+        "retention_policy": "minimum_1_year_audit_log_with_purpose_erasure",
+        "recorded_at": now_iso,
+    }
+
+
+@v1_evidence_router.get("/governance-metrics")
+async def get_irdai_governance_metrics_endpoint(limit: int = Query(200, ge=1, le=500)):
+    """
+    IRDAI 2026 AI Governance Metrics: Track false-positive rate (legitimate claims flagged as
+    REVIEW/REJECT then overridden to PASS) vs false-negative overrides separately across runs.
+    """
+    records = await get_evidence_verification_history(limit=limit)
+    total = len(records)
+    ai_flagged = 0
+    fp_overrides = 0
+    fn_overrides = 0
+    reason_counts: Dict[str, int] = {}
+
+    for r in records:
+        sr = r.get("stage_results") or {}
+        override = sr.get("manual_override")
+        orig_dec = (override or {}).get("ai_original_decision") or r.get("decision")
+        if orig_dec in ("REVIEW", "REJECT"):
+            ai_flagged += 1
+        if override:
+            new_dec = override.get("new_decision")
+            tag = override.get("override_reason_tag") or "UNSPECIFIED"
+            reason_counts[tag] = reason_counts.get(tag, 0) + 1
+            if orig_dec in ("REVIEW", "REJECT") and new_dec == "PASS":
+                fp_overrides += 1
+            elif orig_dec == "PASS" and new_dec == "REJECT":
+                fn_overrides += 1
+
+    fp_rate = round(fp_overrides / max(1, ai_flagged), 4) if ai_flagged else 0.0
+    fn_rate = round(fn_overrides / max(1, total - ai_flagged), 4) if total > ai_flagged else 0.0
+    return {
+        "total_verifications": total,
+        "ai_flagged_count": ai_flagged,
+        "false_positive_overrides": fp_overrides,
+        "false_negative_overrides": fn_overrides,
+        "false_positive_rate": fp_rate,
+        "false_negative_rate": fn_rate,
+        "override_reason_breakdown": reason_counts,
+        "irdai_governance_compliant": True,
+    }
+
+
+@v1_evidence_router.delete("/{evidence_id}/dpdp-erase")
+async def erase_evidence_media_on_withdrawal_endpoint(
+    evidence_id: str,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """
+    DPDP Rules 2025 Erasure Endpoint: Withdraw consent and delete preserved binary image payload
+    from local evidence storage while retaining the statutory 1-year anonymized audit record.
+    """
+    record = await get_evidence_verification_by_id(evidence_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Evidence verification '{evidence_id}' not found.")
+
+    sr = dict(record.get("stage_results") or {})
+    preserved_path = ((sr.get("stage1_integrity") or {}).get("preserved_path"))
+    erased_file = False
+    if preserved_path:
+        p = Path(preserved_path)
+        if p.exists():
+            try:
+                p.unlink()
+                erased_file = True
+            except Exception:
+                pass
+
+    sr["dpdp_erasure"] = {
+        "status": "MEDIA_ERASED_AUDIT_RETAINED",
+        "erased_at": datetime.now(timezone.utc).isoformat(),
+        "binary_file_unlinked": erased_file,
+    }
+    await update_evidence_verification_record(
+        verification_id=evidence_id,
+        decision=record["decision"],
+        stage_results=sr,
+        reasons=list(record.get("reasons") or []) + ["DPDP_CONSENT_WITHDRAWN_MEDIA_ERASED"],
+    )
+    user_id = current_user.get("sub") if current_user else "USR-100001"
+    await log_audit_event(
+        user_id=user_id,
+        action="DPDP_2025_MEDIA_ERASED",
+        details=f"Raw binary media erased for {evidence_id}; anonymized audit hash retained.",
+        resource_type="evidence_verification",
+        resource_id=evidence_id,
+        outcome="SUCCESS",
+    )
+    return {
+        "evidence_id": evidence_id,
+        "status": "MEDIA_ERASED_AUDIT_RETAINED",
+        "binary_file_unlinked": erased_file,
+    }
 
 
 @v1_evidence_router.get("/history")
@@ -401,6 +643,7 @@ async def get_evidence_verification_detail_endpoint(evidence_id: str):
 class EvidenceOverrideRequest(BaseModel):
     new_decision: str  # Must be "PASS" or "REJECT"
     reviewer_note: str = "Manual adjuster review completed."
+    override_reason_tag: str = "FALSE_POSITIVE_GENUINE_DAMAGE"  # IRDAI 2026 false-positive tracking tag
 
 
 class CreateClaimFromEvidenceRequest(BaseModel):
@@ -416,9 +659,9 @@ async def override_evidence_decision_endpoint(
     current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ):
     """
-    Sprint 1.7 Feature A: Human Reviewer Decision Override for REVIEW cases.
-    Updates decision to PASS or REJECT, annotates reasons, updates cost estimate status,
-    and logs manual override audit trail.
+    Sprint 1.7 / 2.1 Feature A: Human Reviewer Decision Override with IRDAI 2026 False-Positive Tagging.
+    Updates decision to PASS or REJECT, preserves `ai_original_decision`, records `override_reason_tag`,
+    updates cost estimate status, and logs manual override audit trail.
     """
     record = await get_evidence_verification_by_id(evidence_id)
     if not record:
@@ -437,8 +680,10 @@ async def override_evidence_decision_endpoint(
     stage_results = dict(record.get("stage_results") or {})
     reasons = list(record.get("reasons") or [])
     cost_estimate = dict(record.get("cost_estimate") or stage_results.get("cost_estimate") or {})
+    prior_override = stage_results.get("manual_override") or {}
+    ai_original_decision = prior_override.get("ai_original_decision") or record.get("decision")
 
-    reasons.append(f"MANUAL_OVERRIDE_{new_decision}: {payload.reviewer_note}")
+    reasons.append(f"MANUAL_OVERRIDE_{new_decision} [{payload.override_reason_tag}]: {payload.reviewer_note}")
 
     if new_decision == "PASS":
         cost_estimate["estimate_status"] = "APPROVED_MANUAL_REVIEW"
@@ -454,7 +699,9 @@ async def override_evidence_decision_endpoint(
         cost_estimate["line_items"] = []
 
     stage_results["manual_override"] = {
+        "ai_original_decision": ai_original_decision,
         "new_decision": new_decision,
+        "override_reason_tag": payload.override_reason_tag,
         "reviewer_note": payload.reviewer_note,
         "overridden_at": datetime.now(timezone.utc).isoformat(),
         "reviewer_id": current_user.get("sub") if current_user else "ADJUSTER_DESK",

@@ -51,7 +51,18 @@ class Settings(BaseSettings):
     max_audio_duration_seconds: float = 30.0
     max_audio_upload_size_bytes: int = 25 * 1024 * 1024  # 25 MB
 
-    # Optional Conversational LLM (OpenAI-compatible / Gemini / Ollama endpoint)
+    # Conversational AI Brain (Approach A: Google Gemini Primary)
+    gemini_api_key: Optional[str] = None
+    gemini_model: str = "gemini-flash-lite-latest"
+    gemini_timeout_seconds: float = 12.0
+
+    # Conversational AI Brain (Approach B: Lightweight Local Ollama Fallback)
+    ollama_enabled: bool = False
+    ollama_api_url: str = "http://localhost:11434/api/chat"
+    ollama_model: str = "qwen2.5:1.5b"
+    ollama_timeout_seconds: float = 15.0
+
+    # Optional Conversational LLM (OpenAI-compatible / Groq / Custom endpoint)
     llm_api_url: Optional[str] = None
     llm_api_key: Optional[str] = None
     llm_model: Optional[str] = None

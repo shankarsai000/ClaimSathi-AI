@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { AppSettingsProvider } from './i18n'
 import Layout from './components/Layout'
+import LandingPage from './landing/LandingPage'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import NewClaim from './pages/NewClaim'
@@ -11,7 +12,7 @@ export default function App() {
   return (
     <AppSettingsProvider>
       <Routes>
-        <Route path="/" element={<Login />} />
+        <Route path="/" element={<LandingPage />} />
         <Route path="/login" element={<Login />} />
         <Route element={<Layout />}>
           <Route path="/dashboard" element={<Dashboard />} />

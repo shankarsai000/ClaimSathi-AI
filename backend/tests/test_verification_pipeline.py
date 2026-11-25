@@ -149,7 +149,7 @@ async def test_api_v1_evidence_endpoints_and_sqlite_persistence():
     cases = [
         ("01_genuine_pass/genuine_car_01.jpg", "PASS"),
         ("02_screen_recapture_review/screen_spoof_01.jpg", "REVIEW"),
-        ("04_no_vehicle_review/non_vehicle_texture_01.jpg", "REVIEW"),
+        ("04_no_vehicle_review/non_vehicle_texture_01.jpg", "REJECT"),
         ("05_corrupted_reject/corrupted_payload.jpg", "REJECT"),
         ("05_corrupted_reject/empty_file.jpg", "REJECT"),
     ]
@@ -824,6 +824,320 @@ async def test_sprint_1_8_v1_voice_extract_slots_and_narrate_evidence():
         assert "car" in nr_data["narration_text"].lower()
         assert "reject" in nr_data["narration_text"].lower()
         assert len(nr_data["narration_text"].split()) < 40
+
+
+@pytest.mark.asyncio
+async def test_closeup_car_damage_under_two_wheeler_claim_rejected():
+    """
+    Close-up car crash photos that emit a low-conf COCO two-wheeler false positive
+    with zero bike damage must still be REJECTED under a Two-Wheeler (Bike) claim.
+    """
+    sample = Path(__file__).resolve().parent.parent.parent / "test_evidence_samples" / "real_car_accidents" / "car_accident_01_original.jpg"
+    if not sample.exists():
+        return
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/v1/evidence/verify",
+            files={"file": (sample.name, sample.read_bytes(), "image/jpeg")},
+            data={"claimed_vehicle_type": "two_wheeler"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["decision"] == "REJECT"
+        assert body["vehicle_category_mismatch"] is True
+        assert body["detected_vehicle_category"] == "four_wheeler"
+        assert any("VEHICLE_CATEGORY_MISMATCH" in r for r in body["reasons"])
+
+
+@pytest.mark.asyncio
+async def test_make_model_cost_tiers_band_vehicle_identity_and_whatsapp_handoff():
+    """
+    Verify Sprint 2.0 Motor production-hardening additions:
+    - Make/Model tiered INR repair cost bands (Hero Splendor Plus vs Mahindra XUV700)
+    - BFSI / IRDAI preliminary band disclaimer & Stage 2 advisory provenance disclaimer
+    - Vehicle Identity Binding plate match vs mismatch
+    - WhatsApp -> Stage 5 Guided Live Camera 1-tap handoff with DPDP PII masking
+    """
+    from app.evidence.cost_estimator import estimate_damage_cost
+    from app.evidence.vehicle_identity import verify_vehicle_identity_binding
+
+    sample_damages = [{"class_name": "lamp broken", "confidence": 0.88, "area_ratio": 0.12}]
+
+    splendor_est = estimate_damage_cost(
+        sample_damages, "PASS", vehicle_make_model="Hero Splendor Plus", claimed_vehicle_type="two_wheeler"
+    )
+    xuv_est = estimate_damage_cost(
+        sample_damages, "PASS", vehicle_make_model="Mahindra XUV700", claimed_vehicle_type="four_wheeler"
+    )
+    assert splendor_est["tier_multiplier"] == 0.85
+    assert xuv_est["tier_multiplier"] == 2.25
+    assert xuv_est["total_estimated_inr"] > splendor_est["total_estimated_inr"] * 2
+    assert xuv_est["estimate_band_min_inr"] < xuv_est["total_estimated_inr"] < xuv_est["estimate_band_max_inr"]
+    assert "Surveyor/Adjuster Review Only" in xuv_est["bfsi_regulatory_disclaimer"]
+
+    id_match = verify_vehicle_identity_binding(
+        file_bytes=b"\xff\xd8\xff\xe0KA-01-MJ-4412",
+        filename="KA01MJ4412_front.jpg",
+        claimed_registration="KA01MJ4412",
+    )
+    assert id_match["plate_match_status"] == "MATCHED"
+    assert id_match["identity_bound"] is True
+
+    id_mismatch = verify_vehicle_identity_binding(
+        file_bytes=b"\xff\xd8\xff\xe0MH-12-DE-9999",
+        filename="other_car.jpg",
+        claimed_registration="KA-01-MJ-4412",
+    )
+    assert id_mismatch["plate_match_status"] == "MISMATCH_FLAGGED"
+    assert id_mismatch["requires_identity_review"] is True
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        handoff_resp = await client.post(
+            "/api/v1/evidence/whatsapp-handoff",
+            json={"phone": "+919876543210", "claimed_registration": "KA-01-MJ-4412"},
+        )
+        assert handoff_resp.status_code == 200
+        hdata = handoff_resp.json()
+        assert hdata["session_id"].startswith("CAP-2026-")
+        assert hdata["raw_whatsapp_media_blocked"] is True
+        assert "3210" in hdata["masked_phone"] and "+919876" not in hdata["masked_phone"]
+        assert "4412" in hdata["masked_registration"]
+        assert len(hdata["instructions"]) == 3
+        assert "/claims/new?step=2&capture_session_id=" in hdata["handoff_url"]
+
+
+@pytest.mark.asyncio
+async def test_cto_audit_gaps_plate_mismatch_escalation_handoff_camera_lock_and_irdai_governance():
+    """
+    Verify all 3 Senior CTO Audit gaps:
+    1. Plate mismatch against pixel/embedded plate identifier escalates PASS -> REVIEW with VEHICLE_REGISTRATION_PLATE_MISMATCH
+    2. Tokenized WhatsApp handoff session blocks gallery uploads (`upload_photo` -> HTTP 400) and locks after single live use
+    3. IRDAI 2026 false-positive override tracking (`governance-metrics`) + DPDP pre-capture consent & media erasure
+    """
+    sample = Path(__file__).resolve().parent.parent.parent / "ml" / "datasets" / "claimsathi_local_test_samples" / "01_genuine_pass" / "genuine_car_01.jpg"
+    img_bytes = sample.read_bytes()
+    # Embed a physical license plate string inside a clean JPEG copy for deterministic mismatch verification
+    mismatched_img = img_bytes + b"\xff\xfe\x00\x10MH-12-DE-9999"
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Plate mismatch must escalate PASS -> REVIEW + VEHICLE_REGISTRATION_PLATE_MISMATCH
+        v_resp = await client.post(
+            "/api/v1/evidence/verify",
+            files={"file": ("car_front.jpg", mismatched_img, "image/jpeg")},
+            data={
+                "claimed_vehicle_type": "four_wheeler",
+                "claimed_registration": "KA-01-MJ-4412",
+            },
+        )
+        assert v_resp.status_code == 200
+        v_body = v_resp.json()
+        assert v_body["decision"] == "REVIEW"
+        assert "VEHICLE_REGISTRATION_PLATE_MISMATCH" in v_body["reasons"]
+        assert v_body["vehicle_identity"]["plate_match_status"] == "MISMATCH_FLAGGED"
+
+        # 2. WhatsApp cryptographic handoff session: reject gallery upload (`upload_photo`), allow single-use `live_photo`
+        h_resp = await client.post(
+            "/api/v1/evidence/whatsapp-handoff",
+            json={"phone": "+919900112233", "claimed_registration": "KA-01-MJ-4412"},
+        )
+        assert h_resp.status_code == 200
+        sess_id = h_resp.json()["session_id"]
+        assert len(sess_id.split("-")[-1]) == 12  # 48-bit hex token
+
+        gal_reject = await client.post(
+            "/api/v1/evidence/verify",
+            files={"file": ("gallery.jpg", img_bytes, "image/jpeg")},
+            data={
+                "claimed_vehicle_type": "four_wheeler",
+                "capture_session_id": sess_id,
+                "capture_method": "upload_photo",
+            },
+        )
+        assert gal_reject.status_code == 400
+        assert "Gallery file uploads are blocked" in gal_reject.json()["detail"]
+
+        live_ok = await client.post(
+            "/api/v1/evidence/verify",
+            files={"file": ("live_frame.jpg", img_bytes, "image/jpeg")},
+            data={
+                "claimed_vehicle_type": "four_wheeler",
+                "capture_session_id": sess_id,
+                "capture_method": "live_photo",
+                "lock_session_on_verify": "true",
+            },
+        )
+        assert live_ok.status_code == 200
+
+        # Replay of same single-use handoff token must fail
+        replay_reject = await client.post(
+            "/api/v1/evidence/verify",
+            files={"file": ("live_replay.jpg", img_bytes, "image/jpeg")},
+            data={
+                "claimed_vehicle_type": "four_wheeler",
+                "capture_session_id": sess_id,
+                "capture_method": "live_photo",
+            },
+        )
+        assert replay_reject.status_code == 400
+        assert "cannot be reused" in replay_reject.json()["detail"]
+
+        # 3. Adjuster override with false-positive reason tag -> governance-metrics + DPDP consent/erasure
+        ov_resp = await client.post(
+            f"/api/v1/evidence/{v_body['id']}/override",
+            json={
+                "new_decision": "PASS",
+                "reviewer_note": "Confirmed valid owner spare vehicle plate transition.",
+                "override_reason_tag": "FALSE_POSITIVE_GENUINE_DAMAGE",
+            },
+        )
+        assert ov_resp.status_code == 200
+
+        gov_resp = await client.get("/api/v1/evidence/governance-metrics")
+        assert gov_resp.status_code == 200
+        gdata = gov_resp.json()
+        assert gdata["irdai_governance_compliant"] is True
+        assert gdata["false_positive_overrides"] >= 1
+        assert gdata["override_reason_breakdown"].get("FALSE_POSITIVE_GENUINE_DAMAGE", 0) >= 1
+
+        consent_resp = await client.post(
+            "/api/v1/evidence/dpdp-consent",
+            json={"voice_consent_granted": True, "live_camera_consent_granted": True},
+        )
+        assert consent_resp.status_code == 200
+        assert consent_resp.json()["consent_id"].startswith("DPDP-")
+
+        erase_resp = await client.delete(f"/api/v1/evidence/{v_body['id']}/dpdp-erase")
+        assert erase_resp.status_code == 200
+        assert erase_resp.json()["status"] == "MEDIA_ERASED_AUDIT_RETAINED"
+
+
+@pytest.mark.asyncio
+async def test_person_selfie_rejected_with_clear_narration():
+    """
+    Webcam selfie / person-only photos without any vehicle must be REJECTED
+    (NON_VEHICLE_PERSON_SELFIE_DETECTED) rather than triggering a '0 rupees provisional estimate'.
+    """
+    from app.evidence.risk_engine.aggregator import aggregate_risk
+    from app.providers.transcription import generate_evidence_narration
+
+    res = aggregate_risk(
+        stage1={"stage1_passed": True},
+        stage2={"editing_software_detected": False},
+        stage3_vehicle={"vehicle_detected": False, "person_detected": True, "person_max_confidence": 0.88},
+        context_valid=False,
+        stage4_spoof={"spoof_risk": 0.05, "predicted_class": "genuine"},
+    )
+    assert res["decision"] == "REJECT"
+    assert res["requires_human_review"] is False
+    assert any("NON_VEHICLE_PERSON_SELFIE_DETECTED" in r for r in res["reasons"])
+
+    nar_hi = generate_evidence_narration(
+        decision="REJECT",
+        total_estimated_inr=0,
+        language="hi-IN",
+        reasons=res["reasons"],
+    )
+    assert "0 rupaye" not in nar_hi["spoken_narration"].lower()
+    assert "chehra" in nar_hi["spoken_narration"].lower() or "selfie" in nar_hi["spoken_narration"].lower()
+
+    nar_zero_rev = generate_evidence_narration(
+        decision="REVIEW",
+        total_estimated_inr=0,
+        language="hi-IN",
+        reasons=["NO_VEHICLE_OR_DAMAGE_DETECTED"],
+    )
+    assert "0 rupaye" not in nar_zero_rev["spoken_narration"].lower()
+    assert "koi gaadi" in nar_zero_rev["spoken_narration"].lower()
+
+
+@pytest.mark.asyncio
+async def test_strict_no_vehicle_and_person_selfie_direct_reject_and_spatial_masking():
+    """
+    1. A clean non-vehicle image ('1 OF 1' graphic / wall text) is directly REJECTED
+       (NO_VEHICLE_DETECTED_REJECTED) with 0 damages and ₹0 estimate.
+    2. Stage 3B short-circuits to 0 damages when a person/selfie or non-vehicle object
+       is detected without any motor vehicle.
+    3. Spatial person-box overlap filtering removes damage detections overlapping a person
+       while keeping damage boxes overlapping a vehicle.
+    4. No-vehicle REJECT narration explains that no bike/car was detected (never 'file integrity').
+    """
+    from PIL import ImageDraw
+    from app.evidence.damage_detection.detector import DamageDetector, _filter_detections_against_persons
+    from app.providers.transcription import generate_evidence_narration
+
+    # 1. Clean "1 OF 1" wall graphic -> direct REJECT with 0 damages and ₹0 estimate
+    wall_img = Image.new("RGB", (640, 480), color=(242, 236, 224))
+    draw = ImageDraw.Draw(wall_img)
+    draw.rectangle([180, 140, 460, 340], outline=(35, 35, 35), width=6)
+    draw.text((265, 225), "1 OF 1", fill=(20, 20, 20))
+    buf = io.BytesIO()
+    wall_img.save(buf, format="JPEG", quality=92)
+
+    wall_res = await verify_evidence_image(
+        file_bytes=buf.getvalue(),
+        filename="Wall_1of1.jpg",
+        claimed_vehicle_type="two_wheeler",
+        persist=False,
+    )
+    assert wall_res["decision"] == "REJECT"
+    assert wall_res["damage_count"] == 0
+    assert wall_res["cost_estimate"]["total_estimated_inr"] == 0
+    assert any("NO_VEHICLE_DETECTED_REJECTED" in r for r in wall_res["reasons"])
+
+    # 2. Stage 3B short-circuits cleanly when vehicle_detected=False and person/object=True
+    detector = DamageDetector()
+    genuine_bytes = (DATASET_DIR / "01_genuine_pass" / "genuine_car_01.jpg").read_bytes()
+    gated_person = detector.detect(
+        file_bytes=genuine_bytes,
+        claimed_vehicle_type="four_wheeler",
+        stage3a_vehicle_detected=False,
+        stage3a_person_detected=True,
+    )
+    assert gated_person["damage_detected"] is False
+    assert gated_person["damage_count"] == 0
+    assert gated_person["resolved_vehicle_category"] == "unknown"
+
+    gated_obj = detector.detect(
+        file_bytes=genuine_bytes,
+        claimed_vehicle_type="two_wheeler",
+        stage3a_vehicle_detected=False,
+        stage3a_non_vehicle_subject_detected=True,
+    )
+    assert gated_obj["damage_detected"] is False
+    assert gated_obj["damage_count"] == 0
+
+    # 3. Spatial overlap filter removes face/person box overlap and keeps vehicle box damage
+    mock_res = {
+        "damage_detected": True,
+        "damage_count": 2,
+        "detected_damage_types": ["dent", "scratch"],
+        "max_confidence": 0.85,
+        "detections": [
+            {"class_id": 0, "class_name": "dent", "confidence": 0.40, "bbox": [110.0, 60.0, 210.0, 200.0], "area_ratio": 0.05},
+            {"class_id": 1, "class_name": "scratch", "confidence": 0.85, "bbox": [340.0, 200.0, 500.0, 320.0], "area_ratio": 0.07},
+        ],
+    }
+    filtered = _filter_detections_against_persons(
+        mock_res,
+        person_bboxes=[[100.0, 50.0, 220.0, 260.0]],
+        vehicle_bboxes=[[320.0, 180.0, 540.0, 360.0]],
+    )
+    assert filtered["damage_count"] == 1
+    assert filtered["detected_damage_types"] == ["scratch"]
+
+    # 4. Spoken narration for NO_VEHICLE_DETECTED_REJECTED explains no vehicle detected
+    nar_en = generate_evidence_narration(
+        decision="REJECT",
+        claimed_vehicle_type="two_wheeler",
+        language="en-IN",
+        reasons=wall_res["reasons"],
+    )
+    assert "file integrity" not in nar_en["spoken_narration"].lower()
+    assert "no bike" in nar_en["spoken_narration"].lower() or "no motor vehicle" in nar_en["spoken_narration"].lower()
+
+
+
 
 
 

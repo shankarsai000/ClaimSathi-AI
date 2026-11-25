@@ -117,6 +117,35 @@ def validate_audio_file(
     return normalized_mime, duration
 
 
+def compute_wav_rms_energy(audio_bytes: bytes) -> Optional[float]:
+    """
+    Compute normalized RMS energy in [0.0, 1.0] for 16-bit PCM WAV buffers.
+    Returns None when the audio is not a standard 16-bit PCM WAV stream.
+    """
+    if not audio_bytes or len(audio_bytes) < 44:
+        return None
+    if audio_bytes[:4] != b"RIFF" or audio_bytes[8:12] != b"WAVE":
+        return None
+    try:
+        with wave.open(io.BytesIO(audio_bytes), "rb") as wf:
+            if wf.getsampwidth() != 2:
+                return None
+            nframes = wf.getnframes()
+            if nframes <= 0:
+                return 0.0
+            nchannels = max(1, wf.getnchannels())
+            frames = wf.readframes(min(nframes, 480000))
+            sample_count = len(frames) // 2
+            if sample_count <= 0:
+                return 0.0
+            samples = struct.unpack(f"<{sample_count}h", frames[: sample_count * 2])
+            sum_sq = sum(s * s for s in samples)
+            rms = math.sqrt(sum_sq / float(sample_count)) / 32768.0
+            return round(min(1.0, rms), 6)
+    except Exception:
+        return None
+
+
 def generate_demo_wav(duration_seconds: float = 1.0, frequency: float = 440.0) -> bytes:
     """Generate a valid, playable 16-bit PCM mono WAV file for demo mode."""
     sample_rate = 16000

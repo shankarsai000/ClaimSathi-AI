@@ -25,7 +25,23 @@ TWO_WHEELER_CLASSES = {
     3: "motorcycle",
 }
 VEHICLE_CLASS_MAP = {**FOUR_WHEELER_CLASSES, **TWO_WHEELER_CLASSES}
+PERSON_CLASS_ID = 0
 VEHICLE_CONF_THRESHOLD = 0.25
+PERSON_SELFIE_CONF_THRESHOLD = 0.45
+PERSON_BBOX_MIN_CONF = 0.35
+NON_VEHICLE_SUBJECT_CONF = 0.50
+
+# Animals and indoor/household objects that represent non-vehicle subjects.
+# Intentionally excludes 'tv', 'laptop', 'cell phone', and street furniture so
+# screen-recapture fraud photos continue into Stage 4 REVIEW screening.
+NON_VEHICLE_SUBJECT_CLASSES = {
+    14: "bird", 15: "cat", 16: "dog", 17: "horse", 18: "sheep", 19: "cow",
+    20: "elephant", 21: "bear", 22: "zebra", 23: "giraffe",
+    39: "bottle", 41: "cup", 45: "bowl", 46: "banana", 47: "apple", 48: "sandwich",
+    53: "pizza", 55: "cake", 56: "chair", 57: "couch", 58: "potted plant", 59: "bed",
+    60: "dining table", 61: "toilet", 73: "book", 75: "vase", 76: "scissors",
+    77: "teddy bear", 79: "toothbrush",
+}
 
 
 def normalize_vehicle_type(claimed_vehicle_type: Optional[str]) -> str:
@@ -65,15 +81,19 @@ class VehicleDetector:
         results = self.model.predict(
             source=rgb_img,
             conf=self.conf_threshold,
-            classes=list(VEHICLE_CLASS_MAP.keys()),
             verbose=False,
         )
 
         detections: List[Dict[str, Any]] = []
+        person_bboxes: List[List[float]] = []
+        non_vehicle_objects: List[Dict[str, Any]] = []
         detected_classes_set = set()
+        non_vehicle_names_set = set()
         max_conf = 0.0
         four_wheeler_max_conf = 0.0
         two_wheeler_max_conf = 0.0
+        person_max_conf = 0.0
+        person_max_area_ratio = 0.0
         largest_area_ratio = 0.0
 
         for res in results:
@@ -81,9 +101,32 @@ class VehicleDetector:
                 continue
             for box in res.boxes:
                 cls_id = int(box.cls[0].item())
+                conf = float(box.conf[0].item())
+                if cls_id == PERSON_CLASS_ID:
+                    if conf >= PERSON_BBOX_MIN_CONF:
+                        px1, py1, px2, py2 = [float(v) for v in box.xyxy[0].tolist()]
+                        p_area = max(0.0, (px2 - px1) * (py2 - py1)) / img_area
+                        person_bboxes.append([round(px1, 2), round(py1, 2), round(px2, 2), round(py2, 2)])
+                        if p_area > person_max_area_ratio:
+                            person_max_area_ratio = p_area
+                    if conf > person_max_conf:
+                        person_max_conf = conf
+                    continue
+                if cls_id in NON_VEHICLE_SUBJECT_CLASSES and conf >= NON_VEHICLE_SUBJECT_CONF:
+                    nx1, ny1, nx2, ny2 = [float(v) for v in box.xyxy[0].tolist()]
+                    nv_name = NON_VEHICLE_SUBJECT_CLASSES[cls_id]
+                    non_vehicle_names_set.add(nv_name)
+                    non_vehicle_objects.append(
+                        {
+                            "class_id": cls_id,
+                            "class_name": nv_name,
+                            "confidence": round(conf, 4),
+                            "bbox": [round(nx1, 2), round(ny1, 2), round(nx2, 2), round(ny2, 2)],
+                        }
+                    )
+                    continue
                 if cls_id not in VEHICLE_CLASS_MAP:
                     continue
-                conf = float(box.conf[0].item())
                 if conf < self.conf_threshold:
                     continue
                 x1, y1, x2, y2 = [float(v) for v in box.xyxy[0].tolist()]
@@ -122,6 +165,13 @@ class VehicleDetector:
 
         return {
             "vehicle_detected": len(detections) > 0,
+            "person_detected": person_max_conf >= PERSON_SELFIE_CONF_THRESHOLD,
+            "person_max_confidence": round(person_max_conf, 4),
+            "person_max_area_ratio": round(person_max_area_ratio, 6),
+            "person_bboxes": person_bboxes,
+            "non_vehicle_subject_detected": len(non_vehicle_objects) > 0,
+            "non_vehicle_subject_names": sorted(non_vehicle_names_set),
+            "non_vehicle_objects": non_vehicle_objects,
             "detected_vehicle_category": detected_vehicle_category,
             "four_wheeler_max_confidence": round(four_wheeler_max_conf, 4),
             "two_wheeler_max_confidence": round(two_wheeler_max_conf, 4),

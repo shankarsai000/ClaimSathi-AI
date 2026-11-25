@@ -230,8 +230,16 @@ async def get_customer_claims_vault(
             detail=f"Customer profile '{verified_uid}' not found.",
         )
 
-    # Strictly fetch claims owned by this authenticated customer
-    claims = await get_all_claims(customer_id=verified_uid)
+    # Strictly fetch claims owned by this authenticated customer (mask sensitive PII in vault summary)
+    raw_claims = await get_all_claims(customer_id=verified_uid)
+    claims = [
+        c.model_copy(
+            update={"motor_claim_form": c.motor_claim_form.masked_copy(mask_all_sensitive=True)}
+        )
+        if c.motor_claim_form
+        else c
+        for c in raw_claims
+    ]
     recent_reports = []
     for c in claims:
         rpts = await get_claim_reports(c.id)

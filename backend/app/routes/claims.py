@@ -24,6 +24,10 @@ from ..models import (
     TranscriptResponse,
     InsurerSubmissionRequest,
     InsurerSubmissionResponse,
+    MotorClaimFormDetails,
+    MotorAdjusterPlaceholders,
+    AdjusterAssessmentUpdateRequest,
+    mask_pii_value,
 )
 from ..auth import (
     get_optional_user,
@@ -68,6 +72,134 @@ router = APIRouter(prefix="/claims", tags=["Claims, Dossier & Insurer Gateway"])
 transcription = MockTranscriptionProvider()
 
 
+def _is_two_wheeler_claim(vehicle_type: Optional[str], claimed_vehicle_type: Optional[str]) -> Optional[bool]:
+    if claimed_vehicle_type == "two_wheeler":
+        return True
+    if claimed_vehicle_type == "four_wheeler":
+        return False
+    vt = (vehicle_type or "").strip().lower()
+    if vt in ("bike", "scooter", "motorcycle", "two_wheeler", "2w"):
+        return True
+    if vt in ("car", "suv", "sedan", "hatchback", "four_wheeler", "4w"):
+        return False
+    return None
+
+
+def normalize_and_validate_motor_form(
+    form: Optional[MotorClaimFormDetails],
+    vehicle_type: Optional[str],
+    claimed_vehicle_type: Optional[str],
+) -> Optional[MotorClaimFormDetails]:
+    """
+    Auto-fill owner-driver defaults, stamp DPDP consent timestamp, flag 2W/4W DL mismatches,
+    and enforce conditional Group B/C rules only when formal submission (dpdp_consent_granted=True) is submitted.
+    """
+    if form is None:
+        return None
+
+    updated = form.model_copy()
+
+    # Auto-fill driver details when policyholder/owner was driving
+    if updated.driver_was_owner is True:
+        if not (updated.driver_name or "").strip() and (updated.claimant_name or "").strip():
+            updated.driver_name = updated.claimant_name.strip()
+        if not (updated.driver_address or "").strip() and (updated.residential_address or "").strip():
+            updated.driver_address = updated.residential_address.strip()
+        if not updated.driver_relationship:
+            updated.driver_relationship = "owner"
+
+    # Stamp ISO-8601 DPDP consent timestamp if granted
+    if updated.dpdp_consent_granted is True and not updated.dpdp_consent_timestamp:
+        updated.dpdp_consent_timestamp = datetime.now(timezone.utc).isoformat()
+
+    # Check 2W vs 4W DL class mismatch warning (unless theft or parked unattended)
+    is_2w = _is_two_wheeler_claim(vehicle_type, claimed_vehicle_type)
+    if (
+        updated.loss_type != "theft"
+        and updated.vehicle_was_parked_unattended is not True
+        and updated.driver_license_class
+        and is_2w is not None
+    ):
+        if is_2w and updated.driver_license_class in ("LMV", "HMV"):
+            updated.driver_license_mismatch_warning = (
+                "DL Class Mismatch: LMV/HMV license selected for a 2-Wheeler claim (MCWG/MCWOG expected)."
+            )
+        elif (not is_2w) and updated.driver_license_class in ("MCWG", "MCWOG"):
+            updated.driver_license_mismatch_warning = (
+                "DL Class Mismatch: 2-Wheeler license (MCWG/MCWOG) selected for a 4-Wheeler claim (LMV expected)."
+            )
+        else:
+            updated.driver_license_mismatch_warning = None
+
+    # Enforce compulsory & conditional Group B/C fields strictly on formal confirmed form submission
+    if updated.dpdp_consent_granted is True:
+        if updated.truthfulness_declaration_accepted is False:
+            raise HTTPException(
+                status_code=422,
+                detail="Truthfulness declaration must be accepted before final submission.",
+            )
+        if updated.other_insurance_exists is True and not (updated.other_insurance_details or "").strip():
+            raise HTTPException(
+                status_code=422,
+                detail="Other insurance details are required when another active policy is declared.",
+            )
+        if updated.claim_settlement_mode == "reimbursement":
+            missing_bank = [
+                lbl
+                for attr, lbl in (
+                    ("bank_account_holder_name", "Account Holder Name"),
+                    ("bank_account_number", "Bank Account Number"),
+                    ("bank_ifsc_code", "Bank IFSC Code"),
+                )
+                if not (getattr(updated, attr) or "").strip()
+            ]
+            if missing_bank:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Reimbursement bank details required: {', '.join(missing_bank)}.",
+                )
+        if updated.police_fir_lodged_flag is True:
+            if not (updated.fir_or_gd_number or "").strip() or not (updated.police_station_name or "").strip():
+                raise HTTPException(
+                    status_code=422,
+                    detail="FIR/GD Number and Police Station Name are required when police FIR is lodged.",
+                )
+        if updated.loss_type == "theft" and updated.financier_hypothecated is True:
+            if not (updated.financier_name or "").strip():
+                raise HTTPException(
+                    status_code=422,
+                    detail="Financier name is required when the stolen vehicle is hypothecated.",
+                )
+        if (
+            updated.loss_type != "theft"
+            and updated.vehicle_was_parked_unattended is not True
+            and updated.driver_was_owner is False
+            and not (updated.driver_name or "").strip()
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Driver name is required when a non-owner was driving the vehicle.",
+            )
+
+    return updated
+
+
+def sanitize_claim_for_response(claim: ClaimRecord, summary_mode: bool = False) -> ClaimRecord:
+    """Apply DPDP-2025 PII masking via mask_pii_value on bank/DL/mobile fields."""
+    if not claim.motor_claim_form:
+        return claim
+    masked_form = claim.motor_claim_form.masked_copy(mask_all_sensitive=summary_mode)
+    return claim.model_copy(update={"motor_claim_form": masked_form})
+
+
+def _merge_motor_form(existing: MotorClaimFormDetails, incoming: MotorClaimFormDetails) -> MotorClaimFormDetails:
+    base_data = existing.model_dump()
+    patch_data = incoming.model_dump(exclude_unset=True)
+    for k, v in patch_data.items():
+        base_data[k] = v
+    return MotorClaimFormDetails(**base_data)
+
+
 @router.post("/transcribe", response_model=TranscriptResponse)
 async def transcribe_audio(request: TranscriptRequest):
     """Simulate voice transcription and field extraction (Phase 1 compatibility)."""
@@ -97,12 +229,14 @@ async def extract_text_intake(payload: dict):
     if not text:
         raise HTTPException(status_code=400, detail="Incident description text is required.")
 
+    known_motor_slots = payload.get("known_motor_slots")
     conv = await process_conversational_turn(
         message=text,
         language=language_hint,
         known_fields=known_fields if isinstance(known_fields, dict) else None,
         history=history if isinstance(history, list) else None,
         expected_field=expected_field,
+        known_motor_slots=known_motor_slots if isinstance(known_motor_slots, dict) else None,
     )
     return {
         "transcript": text,
@@ -111,13 +245,22 @@ async def extract_text_intake(payload: dict):
         "missing_fields": conv["missing_fields"],
         "known_fields": conv["known_fields"],
         "assistant_dialogue": conv["reply_text"],
-        "assistant_speech_text": conv["reply_text"],
+        "assistant_speech_text": conv.get("assistant_speech_text") or conv["reply_text"],
         "assistant_language": conv["assistant_language"],
         "claimed_vehicle_type": conv.get("claimed_vehicle_type"),
+        "vehicle_make_model": conv.get("vehicle_make_model"),
         "vehicle_registration": conv.get("vehicle_registration"),
+        "claimed_registration": conv.get("claimed_registration"),
+        "motor_slots": conv.get("motor_slots"),
         "damage_keywords": conv.get("damage_keywords", []),
         "incident_description": conv.get("incident_description"),
         "is_complete": conv["is_complete"],
+        "no_speech_detected": conv.get("no_speech_detected", False),
+        "reasoning_trace": (
+            conv["reasoning_trace"].model_dump()
+            if hasattr(conv.get("reasoning_trace"), "model_dump")
+            else conv.get("reasoning_trace")
+        ),
     }
 
 
@@ -192,16 +335,29 @@ async def create_claim(
         if tot > 0 and "Verified AI Estimate" not in damage_desc:
             damage_desc += f" (Verified AI Estimate: INR {tot:,})"
 
+    normalized_form = normalize_and_validate_motor_form(
+        request.motor_claim_form,
+        vehicle_type=request.vehicle_type,
+        claimed_vehicle_type=request.claimed_vehicle_type,
+    )
+    resolved_reg = request.claimed_registration or (
+        request.policy_reference
+        if request.policy_reference and not request.policy_reference.upper().startswith(("POL-", "MOT-", "CS-"))
+        else None
+    )
+
     record = ClaimRecord(
         id=primary_id,
         customer_id=effective_customer_id,
         insurance_type="motor",
         policy_reference=request.policy_reference,
+        claimed_registration=resolved_reg,
         insurer_name=request.insurer_name or "Bharat General Insurance",
         policy_type=request.policy_type or "Comprehensive Motor Policy",
         incident_location=request.incident_location,
         incident_date=request.incident_date,
         vehicle_type=request.vehicle_type,
+        vehicle_make_model=request.vehicle_make_model,
         damage_description=damage_desc,
         people_involved=request.people_involved or "Policyholder (Driver)",
         injuries_reported=request.injuries_reported or "No physical injuries reported",
@@ -209,6 +365,8 @@ async def create_claim(
         transcript=request.transcript,
         status=ClaimStatus.CONFIRMED,
         customer_confirmation=True,
+        motor_claim_form=normalized_form or MotorClaimFormDetails(),
+        insurer_adjuster_data=request.insurer_adjuster_data or MotorAdjusterPlaceholders(),
         is_demo=True,
         created_at=now,
         updated_at=now,
@@ -281,9 +439,10 @@ async def list_claims(
         all_claims = await get_all_claims()
         claims = [c for c in all_claims if c.id.startswith("DEMO-")]
 
+    masked_claims = [sanitize_claim_for_response(c, summary_mode=True) for c in claims]
     return ClaimListResponse(
-        claims=claims,
-        total=len(claims),
+        claims=masked_claims,
+        total=len(masked_claims),
         is_demo=True,
     )
 
@@ -310,9 +469,10 @@ async def claim_stats(
         claims = [c for c in all_claims if c.id.startswith("DEMO-")]
 
     total = len(claims)
+    masked_recent = [sanitize_claim_for_response(c, summary_mode=True).model_dump() for c in claims[:6]]
     return {
         "total_claims": total,
-        "recent_claims": [c.model_dump() for c in claims[:6]],
+        "recent_claims": masked_recent,
         "is_demo": True,
     }
 
@@ -349,7 +509,7 @@ async def get_claim_detail(
     )
 
     return ClaimDetailResponse(
-        claim=claim,
+        claim=sanitize_claim_for_response(claim, summary_mode=False),
         timeline=timeline,
         evidence=evidence,
         reports=reports,
@@ -388,13 +548,34 @@ async def update_claim_details(
             )
 
     valid_cols = {
-        "policy_reference", "insurer_name", "policy_type", "incident_location",
-        "incident_date", "vehicle_type", "damage_description", "people_involved",
-        "injuries_reported", "detailed_statement", "customer_confirmation",
+        "policy_reference", "claimed_registration", "insurer_name", "policy_type",
+        "incident_location", "incident_date", "vehicle_type", "vehicle_make_model",
+        "damage_description", "people_involved", "injuries_reported",
+        "detailed_statement", "customer_confirmation",
     }
     updates = {k: v for k, v in request.model_dump().items() if v is not None and k in valid_cols}
     if "customer_confirmation" in updates:
         updates["customer_confirmation"] = int(bool(updates["customer_confirmation"]))
+
+    eff_vehicle_type = updates.get("vehicle_type") or claim.vehicle_type
+    if request.motor_claim_form is not None:
+        merged_form = _merge_motor_form(claim.motor_claim_form or MotorClaimFormDetails(), request.motor_claim_form)
+        validated_form = normalize_and_validate_motor_form(
+            merged_form,
+            vehicle_type=eff_vehicle_type,
+            claimed_vehicle_type=request.claimed_vehicle_type,
+        )
+        if validated_form is not None:
+            updates["motor_claim_form_json"] = json.dumps(validated_form.model_dump(), ensure_ascii=False)
+            # Sync supplemental summary columns cleanly if supplied
+            if validated_form.driver_name and "people_involved" not in updates:
+                updates["people_involved"] = (
+                    f"{validated_form.driver_name} ({validated_form.driver_relationship or 'Driver'})"
+                )
+    if request.insurer_adjuster_data is not None:
+        updates["adjuster_assessment_json"] = json.dumps(
+            request.insurer_adjuster_data.model_dump(), ensure_ascii=False
+        )
 
     if request.evidence_id and ev_record:
         cost_est = ev_record.get("cost_estimate") or {}
@@ -433,13 +614,58 @@ async def update_claim_details(
         description="Customer reviewed and updated claim details and evidence findings.",
         status="confirmed",
     )
+    audit_fields = [k for k in updates.keys() if k not in ("motor_claim_form_json", "adjuster_assessment_json")]
+    if "motor_claim_form_json" in updates and updated and updated.motor_claim_form:
+        pii_note = []
+        if updated.motor_claim_form.bank_account_number:
+            pii_note.append(f"bank={mask_pii_value(updated.motor_claim_form.bank_account_number, 4)}")
+        if updated.motor_claim_form.driver_license_number:
+            pii_note.append(f"dl={mask_pii_value(updated.motor_claim_form.driver_license_number, 4)}")
+        audit_fields.append(f"motor_claim_form({', '.join(pii_note) if pii_note else 'updated'})")
     await log_audit_event(
         user_id=user_id,
         claim_id=claim_id,
         action="CLAIM_UPDATED",
-        details=f"Customer updated fields: {', '.join(updates.keys())}",
+        details=f"Customer updated fields: {', '.join(audit_fields)}",
     )
-    return updated
+    return sanitize_claim_for_response(updated, summary_mode=False) if updated else updated
+
+
+@router.put("/{claim_id}/adjuster-assessment", response_model=ClaimRecord)
+async def update_adjuster_assessment_endpoint(
+    claim_id: str,
+    request: AdjusterAssessmentUpdateRequest,
+    claim: ClaimRecord = Depends(get_authorized_claim_or_demo),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """
+    Group D — Insurer Policy Master, External Registry Hooks & Licensed Surveyor Assessment.
+    Adjuster/Dossier portal only; never exposed as customer inputs during intake.
+    """
+    user_id = current_user.get("sub") if current_user else claim.customer_id
+    current_adj = claim.insurer_adjuster_data or MotorAdjusterPlaceholders()
+    new_adj = MotorAdjusterPlaceholders(
+        insurer_policy_master=request.insurer_policy_master or current_adj.insurer_policy_master,
+        external_registry_checks=request.external_registry_checks or current_adj.external_registry_checks,
+        surveyor_assessment=request.surveyor_assessment or current_adj.surveyor_assessment,
+    )
+    updated = await update_claim_record(
+        claim_id,
+        {"adjuster_assessment_json": json.dumps(new_adj.model_dump(), ensure_ascii=False)},
+    )
+    await add_timeline_event(
+        claim_id=claim_id,
+        title="Adjuster & Surveyor Assessment Updated",
+        description="Insurer policy master / surveyor assessment metadata updated in adjuster portal.",
+        status="confirmed",
+    )
+    await log_audit_event(
+        user_id=user_id,
+        claim_id=claim_id,
+        action="ADJUSTER_ASSESSMENT_UPDATED",
+        details=f"Adjuster updated Group D assessment for claim {claim_id}",
+    )
+    return sanitize_claim_for_response(updated, summary_mode=False) if updated else updated
 
 
 @router.delete("/{claim_id}")

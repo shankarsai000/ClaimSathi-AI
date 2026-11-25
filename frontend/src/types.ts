@@ -31,6 +31,172 @@ export interface RequestMetadata {
   bytes_received?: number
 }
 
+export interface ConversationalReasoningTrace {
+  detected_emotion: string
+  empathy_cue: string
+  safety_check_status: string
+  inferred_cause?: string | null
+  drivability_assessment: string
+  plausibility_note: string
+  causal_question_asked?: string | null
+  thought_process: string
+  speech_rate: number
+  speech_pitch: number
+  llm_provider?: string
+  detected_intent?: string
+  applied_gnani_tags?: string[]
+}
+
+export type MotorLossType =
+  | 'own_damage_accident'
+  | 'theft'
+  | 'fire_natural_calamity'
+  | 'third_party'
+
+export type MotorUsageType = 'private_social_domestic' | 'commercial_hire_reward'
+export type MotorDriverRelationship = 'owner' | 'paid_driver' | 'relative_or_friend'
+export type MotorLicenseClass = 'MCWG' | 'MCWOG' | 'LMV' | 'HMV' | 'other'
+export type ClaimSettlementMode = 'cashless' | 'reimbursement'
+
+export interface VoiceIntakeMotorSlots {
+  claimed_registration?: string | null
+  vehicle_make_model?: string | null
+  loss_type?: MotorLossType | null
+  incident_time?: string | null
+  driver_was_owner?: boolean | null
+  driver_name?: string | null
+  driver_relationship?: MotorDriverRelationship | null
+  vehicle_usage_type?: MotorUsageType | null
+  pillion_rider_present?: boolean | null
+  occupants_count?: number | null
+  injury_or_third_party_flag?: boolean | null
+  police_fir_lodged_flag?: boolean | null
+  inspection_location?: string | null
+}
+
+export interface MotorClaimFormDetails {
+  // Group B1: Claimant & Policy Identification
+  claimant_name?: string | null
+  registered_mobile?: string | null
+  claimant_email?: string | null
+  residential_address?: string | null
+  pincode?: string | null
+  other_insurance_exists?: boolean | null
+  other_insurance_details?: string | null
+
+  // Group B2: Incident & Vehicle Usage Details
+  loss_type?: MotorLossType | null
+  incident_time?: string | null
+  vehicle_usage_type?: MotorUsageType | null
+  pillion_rider_present?: boolean | null
+  occupants_count?: number | null
+  vehicle_was_parked_unattended?: boolean | null
+  injury_or_third_party_flag?: boolean | null
+  police_fir_lodged_flag?: boolean | null
+
+  // Group B3: Driver Details at Time of Accident
+  driver_was_owner?: boolean | null
+  driver_name?: string | null
+  driver_age?: number | null
+  driver_address?: string | null
+  driver_relationship?: MotorDriverRelationship | null
+  driver_license_number?: string | null
+  driver_license_expiry?: string | null
+  driver_license_class?: MotorLicenseClass | null
+  driver_issuing_rto?: string | null
+  driver_under_intoxication?: boolean | null
+  driver_injured?: boolean | null
+  driver_license_mismatch_warning?: string | null
+
+  // Group B4: Inspection, Settlement Mode & Workshop Details
+  claim_settlement_mode?: ClaimSettlementMode | null
+  inspection_location?: string | null
+  preferred_inspection_datetime?: string | null
+  workshop_name?: string | null
+  workshop_address?: string | null
+  workshop_contact?: string | null
+  approx_estimated_repair_cost_inr?: number | null
+
+  // Group B5: Legal Declarations & DPDP Consent
+  dpdp_consent_granted?: boolean | null
+  dpdp_consent_timestamp?: string | null
+  truthfulness_declaration_accepted?: boolean | null
+  declaration_place?: string | null
+  declaration_date?: string | null
+  insured_digital_signature?: string | null
+
+  // Group C Trigger 1: Reimbursement Bank / NEFT Details
+  bank_account_holder_name?: string | null
+  bank_account_number?: string | null
+  bank_ifsc_code?: string | null
+  bank_branch_name?: string | null
+
+  // Group C Trigger 2: FIR / Police Report Details
+  fir_or_gd_number?: string | null
+  police_station_name?: string | null
+  fir_report_date?: string | null
+  fir_complainant_name?: string | null
+
+  // Group C Trigger 3: Theft-Specific Details
+  non_traceable_report_status?: 'pending' | 'obtained' | 'not_applicable' | null
+  all_original_keys_available?: boolean | null
+  financier_hypothecated?: boolean | null
+  financier_name?: string | null
+  stolen_accessories_details?: string | null
+
+  // Group C Trigger 4: Injury / Third-Party Details
+  third_party_loss_type?: 'injury' | 'death' | 'property_damage' | 'driver_or_occupant_only' | null
+  third_party_injured_count?: number | null
+  hospital_and_treatment_details?: string | null
+  third_party_vehicle_reg?: string | null
+  third_party_policy_details?: string | null
+  third_party_damage_summary?: string | null
+  witness_name?: string | null
+  witness_contact?: string | null
+
+  // Group C Trigger 5: Fire / Natural Calamity
+  fire_brigade_report_number?: string | null
+}
+
+export interface InsurerPolicyMaster {
+  claim_reference_number?: string | null
+  policy_start_date?: string | null
+  policy_end_date?: string | null
+  idv_inr?: number | null
+  ncb_percent?: number | null
+  coverage_type?: string | null
+  active_addons: string[]
+  compulsory_excess_inr?: number | null
+  voluntary_excess_inr?: number | null
+  hypothecation_financier?: string | null
+}
+
+export interface ExternalRegistryChecks {
+  engine_number?: string | null
+  chassis_vin_number?: string | null
+  vahan_status?: string | null
+  sarathi_dl_status?: string | null
+  iib_cross_claim_status?: string | null
+  edar_sync_status?: string | null
+}
+
+export interface SurveyorAssessment {
+  surveyor_name?: string | null
+  surveyor_irdai_license_no?: string | null
+  odometer_reading_km?: number | null
+  damage_freshness_classification: 'fresh' | 'pre_existing' | 'mixed' | 'pending'
+  imt_gr9_depreciation_inr?: number | null
+  salvage_value_inr?: number | null
+  constructive_total_loss?: boolean | null
+  net_assessed_payable_inr?: number | null
+}
+
+export interface MotorAdjusterPlaceholders {
+  insurer_policy_master: InsurerPolicyMaster
+  external_registry_checks: ExternalRegistryChecks
+  surveyor_assessment: SurveyorAssessment
+}
+
 export interface VoiceTranscribeResponse {
   transcript: string
   model: string
@@ -43,9 +209,14 @@ export interface VoiceTranscribeResponse {
   assistant_speech_text?: string | null
   assistant_language?: string | null
   claimed_vehicle_type?: 'two_wheeler' | 'four_wheeler' | null
+  vehicle_make_model?: string | null
   vehicle_registration?: string | null
+  claimed_registration?: string | null
+  motor_slots?: VoiceIntakeMotorSlots | null
   damage_keywords?: string[]
   incident_description?: string | null
+  reasoning_trace?: ConversationalReasoningTrace | null
+  no_speech_detected?: boolean
 }
 
 export interface EvidenceNarrationRequest {
@@ -56,6 +227,7 @@ export interface EvidenceNarrationRequest {
   total_estimated_inr?: number
   damages?: any[]
   language?: string
+  reasons?: string[]
 }
 
 export interface EvidenceNarrationResponse {
@@ -69,7 +241,10 @@ export interface EvidenceNarrationResponse {
 export interface ExtractSlotsResponse {
   transcript: string
   claimed_vehicle_type?: 'two_wheeler' | 'four_wheeler' | null
+  vehicle_make_model?: string | null
   vehicle_registration?: string | null
+  claimed_registration?: string | null
+  motor_slots?: VoiceIntakeMotorSlots | null
   damage_keywords: string[]
   incident_description: string
   detected_language: string
@@ -85,6 +260,7 @@ export interface ConverseTurnRequest {
   message: string
   language?: string
   known_fields?: Record<string, string | null>
+  known_motor_slots?: Record<string, any>
   history?: Array<{ sender: 'user' | 'assistant'; text: string }>
   expected_field?: string | null
 }
@@ -101,10 +277,15 @@ export interface ConverseTurnResponse {
   known_fields: Record<string, string | null>
   newly_captured: Record<string, string>
   claimed_vehicle_type?: 'two_wheeler' | 'four_wheeler' | null
+  vehicle_make_model?: string | null
   vehicle_registration?: string | null
+  claimed_registration?: string | null
+  motor_slots?: VoiceIntakeMotorSlots | null
   damage_keywords: string[]
   incident_description?: string | null
   is_complete: boolean
+  no_speech_detected?: boolean
+  reasoning_trace?: ConversationalReasoningTrace | null
 }
 
 export interface SpeechSynthesizeRequest {
@@ -242,6 +423,8 @@ export interface CanonicalClaimSchema {
   customer_confirmation: boolean
   report_status: string
   insurer_submission_status: string
+  user_declared_fields?: Record<string, any>
+  insurer_and_registry_fields?: Record<string, any>
 }
 
 export interface ProfessionalClaimDossier {
@@ -300,9 +483,11 @@ export interface InsurerSubmissionResponse {
 
 export interface ClaimCreateRequest {
   policy_reference: string
+  claimed_registration?: string
   incident_location: string
   incident_date: string
   vehicle_type: string
+  vehicle_make_model?: string
   damage_description: string
   transcript: string
   customer_id?: string
@@ -317,6 +502,7 @@ export interface ClaimCreateRequest {
   spoof_risk?: number
   total_estimated_inr?: number
   cost_estimate?: CostEstimateReport | null
+  motor_claim_form?: MotorClaimFormDetails
 }
 
 export interface ClaimCreateResponse {
@@ -332,11 +518,13 @@ export interface ClaimRecord {
   customer_id: string
   insurance_type: string
   policy_reference: string
+  claimed_registration?: string | null
   insurer_name: string
   policy_type: string
   incident_location: string
   incident_date: string
   vehicle_type: string
+  vehicle_make_model?: string | null
   damage_description: string
   people_involved: string
   injuries_reported: string
@@ -348,6 +536,9 @@ export interface ClaimRecord {
   insurer_submission_status: string
   evidence_count_images: number
   evidence_count_videos: number
+  motor_claim_form?: MotorClaimFormDetails
+  insurer_adjuster_data?: MotorAdjusterPlaceholders
+  masked_pii_summary?: Record<string, string | null>
   is_demo: boolean
   created_at: string
   updated_at: string
@@ -418,6 +609,35 @@ export interface CostEstimateReport {
   line_items: CostEstimateLineItem[]
   total_estimated_inr: number
   total_inr: number
+  estimate_band_min_inr?: number
+  estimate_band_max_inr?: number
+  vehicle_make_model?: string
+  make_model_tier?: string
+  tier_multiplier?: number
+  bfsi_regulatory_disclaimer?: string
+}
+
+export interface VehicleIdentityBinding {
+  claimed_registration?: string | null
+  detected_plate_candidate?: string | null
+  detected_candidates?: string[]
+  plate_match_status: string
+  identity_bound: boolean
+  requires_identity_review: boolean
+  identity_note: string
+  mandatory_capture_prompts?: string[]
+}
+
+export interface WhatsappHandoffResponse {
+  session_id: string
+  claim_id: string | null
+  handoff_url: string
+  masked_phone: string
+  masked_registration: string
+  raw_whatsapp_media_blocked: boolean
+  instructions: string[]
+  whatsapp_template_preview: string
+  expires_in_seconds: number
 }
 
 export interface YoloDetectionBox {
@@ -443,6 +663,7 @@ export interface EvidenceVerificationReport {
   context_valid?: boolean
   reasons: string[]
   cost_estimate?: CostEstimateReport | null
+  vehicle_identity?: VehicleIdentityBinding | null
   stage_results: {
     claimed_vehicle_type?: string
     detected_vehicle_category?: string
@@ -466,6 +687,8 @@ export interface EvidenceVerificationReport {
       editing_software_detected: boolean
       c2pa_present: boolean
       metadata_risk_score: number
+      provenance_advisory_only?: boolean
+      provenance_disclaimer?: string
     } | null
     stage3a_vehicle?: {
       vehicle_detected: boolean
@@ -518,4 +741,15 @@ export interface LinkedClaim {
 export interface EvidenceVerificationHistoryResponse {
   total: number
   verifications: EvidenceVerificationReport[]
+}
+
+export interface GovernanceMetricsResponse {
+  total_verifications: number
+  ai_flagged_count: number
+  false_positive_overrides: number
+  false_negative_overrides: number
+  false_positive_rate: number
+  false_negative_rate: number
+  override_reason_breakdown: Record<string, number>
+  irdai_governance_compliant: boolean
 }
